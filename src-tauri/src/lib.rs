@@ -291,9 +291,8 @@ fn list_chats(state: State<'_, EigenBrain>) -> Result<Vec<ChatListItem>, String>
 }
 
 #[tauri::command]
-fn get_chat_messages(args: ChatIdArgs, state: State<'_, EigenBrain>) -> Result<Vec<ChatMessageRow>, String> {
+fn get_chat_messages(chat_id: String, state: State<'_, EigenBrain>) -> Result<Vec<ChatMessageRow>, String> {
     let conn = open_db(&state.db_path)?;
-    let chat_id = args.chat_id;
 
     let mut stmt = conn
         .prepare(

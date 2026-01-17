@@ -92,6 +92,10 @@ export default function App() {
     const unlistenEndRef = useRef<null | (() => void)>(null);
 
     const endRef = useRef<HTMLDivElement | null>(null);
+    const activeChatIdRef = useRef(chatId);
+    useEffect(() => {
+        activeChatIdRef.current = chatId;
+    }, [chatId]);
 
     async function refreshChats() {
         try {
@@ -105,17 +109,17 @@ export default function App() {
     async function loadChat(chat_id: string) {
         try {
             setChatId(chat_id);
-            const rows = await invoke<ChatMessageRow[]>("get_chat_messages", { chat_id });
+
+            const rows = await invoke<ChatMessageRow[]>("get_chat_messages", { chatId : chat_id });
 
             const loaded: ChatMessage[] = rows.map((r) => ({
-                id: r.id,
-                role: (r.role === "assistant" ? "assistant" : "user") as Role,
-                content: r.content,
-                thinking: "",
-                isStreaming: false,
+            id: r.id,
+            role: (r.role === "assistant" ? "assistant" : "user") as Role,
+            content: r.content,
+            thinking: "",        // backend strips thinking right now
+            isStreaming: false,
             }));
 
-            
             setSelectedThinkingId(null);
             setIsGenerating(false);
             currentAssistantIdRef.current = null;
@@ -123,9 +127,10 @@ export default function App() {
 
             setMessages(loaded.length > 0 ? loaded : [welcomeMessage()]);
         } catch (e) {
-            console.log("[get_chat_messages] error", e);
+            console.error("[get_chat_messages] error", e);
         }
     }
+
 
     function resetToDraftChat() {
         setChatId(DRAFT_CHAT_ID);
@@ -221,7 +226,7 @@ export default function App() {
                 if (!event.payload) return;
 
                 // Only accept stream events for the currently open chat
-                if (chatId && event.payload.chat_id !== chatId) return;
+                if (event.payload.chat_id !== activeChatIdRef.current) return;
 
                 setIsGenerating(true);
                 inThinkRef.current = false;
@@ -241,7 +246,7 @@ export default function App() {
                 if (!mounted) return;
                 if (!event.payload) return;
 
-                if (chatId && event.payload.chat_id !== chatId) return;
+                if (event.payload.chat_id !== activeChatIdRef.current) return;
 
                 const delta = event.payload.delta ?? "";
                 const assistantId = currentAssistantIdRef.current;
@@ -289,7 +294,7 @@ export default function App() {
                 if (!mounted) return;
                 if (!event.payload) return;
 
-                if (chatId && event.payload.chat_id !== chatId) return;
+                if (event.payload.chat_id !== activeChatIdRef.current) return;
 
                 setIsGenerating(false);
                 inThinkRef.current = false;
@@ -431,8 +436,11 @@ export default function App() {
                     {chatHistory.map((chat) => (
                         <div
                             key={chat.id}
-                            className="historyItem"
-                            onClick={() => loadChat(chat.id)}
+                            // Add the 'active' conditional class here
+                            className={`historyItem ${chatId === chat.id ? "active" : ""}`}
+                            onClick={() => {
+                                if (chatId !== chat.id) loadChat(chat.id);
+                            }}
                             style={{ cursor: "pointer" }}
                             title={chat.preview}
                         >
