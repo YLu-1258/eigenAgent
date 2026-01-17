@@ -18,6 +18,8 @@ struct EigenBrain {
     is_loaded: AtomicBool,
 }
 
+const MODEL_PATH: &str = "/Users/alexa/Projects/eigen/eigenAgent/models/Qwen3VL-4B-Thinking-Q4_K_M.gguf";
+
 const SYSTEM_PROMPT: &str = r#"
 You are Eigen, a helpful AI assistant.
 
@@ -230,7 +232,7 @@ pub fn run() {
         })
         .setup(|app| {
             let app_handle = app.handle().clone();
-            let path = "/Users/alexa/Projects/eigen/eigenAgent/models/Qwen3VL-4B-Thinking-Q4_K_M.gguf"
+            let path = MODEL_PATH
                 .to_string();
 
             // Optional: tell frontend we’re starting
