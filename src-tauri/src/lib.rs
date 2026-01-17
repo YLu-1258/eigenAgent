@@ -160,6 +160,18 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+fn utf8_tail(s: &str, max_bytes: usize) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    let mut start = s.len().saturating_sub(max_bytes);
+    // Walk forward/backward to a valid char boundary
+    while start > 0 && !s.is_char_boundary(start) {
+        start -= 1;
+    }
+    s[start..].to_string()
+}
+
 fn build_prompt(system: &str, summary: &str, msgs: &[ChatMsg], max_turns: usize) -> String {
     let recent = if msgs.len() > max_turns {
         &msgs[msgs.len() - max_turns..]
@@ -490,12 +502,7 @@ async fn chat_stream(
                     }
                 }
 
-                // Keep a small tail to catch split tags (simple heuristic)
-                if !chunk.is_empty() {
-                    let tail_len = chunk.len().min(16);
-                    carry = chunk[chunk.len() - tail_len..].to_string();
-                }
-
+                carry = utf8_tail(&chunk, 16);
                 utf8_buf.clear();
             }
             Err(e) => {
