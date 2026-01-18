@@ -18,7 +18,6 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 
-const MODEL_PATH: &str = "/Users/alexa/Projects/eigen/eigenAgent/models/Qwen3VL-4B-Thinking-Q4_K_M.gguf";
 const MAX_TOKENS: u32 = 4096;
 
 const SYSTEM_PROMPT: &str = r#"
@@ -112,6 +111,33 @@ struct EigenBrain {
     db_path: PathBuf,
 }
 
+fn find_first_gguf_model(app: &AppHandle) -> Result<PathBuf, String> {
+    let models_dir = app.path().resource_dir().ok().map(|p| p.join("../../../models")).unwrap();
+
+    if !models_dir.exists() {
+        return Err(format!("Models directory not found: {}", models_dir.display()));
+    }
+
+    let entries = std::fs::read_dir(&models_dir)
+        .map_err(|e| format!("Failed to read models directory: {}", e))?;
+    
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext.to_string_lossy().to_lowercase() == "gguf" {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    Err("No .gguf model files found in ./models directory".to_string())
+}
+
 fn unix_ms() -> i64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -158,18 +184,6 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
 
     Ok(())
-}
-
-fn utf8_tail(s: &str, max_bytes: usize) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-    let mut start = s.len().saturating_sub(max_bytes);
-    // Walk forward/backward to a valid char boundary
-    while start > 0 && !s.is_char_boundary(start) {
-        start -= 1;
-    }
-    s[start..].to_string()
 }
 
 fn build_prompt(system: &str, summary: &str, msgs: &[ChatMsg], max_turns: usize) -> String {
@@ -443,11 +457,8 @@ async fn chat_stream(
     .map_err(|e| e.to_string())?;
 
     // Collect final answer (excluding <think> blocks)
-    let mut final_answer = String::new();
     let mut utf8_buf: Vec<u8> = Vec::new();
-
-    let mut in_think = false;
-    let mut carry = String::new(); // handles tags split across chunks
+    let mut carry: Vec<u8> = Vec::new(); // handles tags split across chunks
 
     for _ in 0..MAX_TOKENS {
         let next = sampler.sample(&ctx, logits_i);
@@ -455,72 +466,39 @@ async fn chat_stream(
             break;
         }
 
-        let bytes = model
-            .token_to_bytes(next, Special::Plaintext)
-            .map_err(|e| e.to_string())?;
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(&carry);
+        bytes.extend(
+            model
+                .token_to_bytes(next, Special::Plaintext)
+                .map_err(|e| e.to_string())?
+        );
         utf8_buf.extend_from_slice(&bytes);
 
-        // Only emit when we have valid UTF-8
-        match std::str::from_utf8(&utf8_buf) {
+        match std::str::from_utf8(&bytes) {
             Ok(valid_str) => {
-                // Send to UI
                 app.emit(
                     "chat:delta",
                     ChatDeltaPayload {
                         chat_id: chat_id.clone(),
-                        delta: valid_str.to_string(),
-                    },
+                        delta: valid_str.to_string()
+                    }
                 )
                 .map_err(|e| e.to_string())?;
-
-                // Parse into final_answer without <think>...</think>
-                let mut chunk = String::new();
-                chunk.push_str(&carry);
-                chunk.push_str(valid_str);
                 carry.clear();
-
-                let mut i = 0;
-                while i < chunk.len() {
-                    if !in_think {
-                        if let Some(start) = chunk[i..].find("<think>") {
-                            final_answer.push_str(&chunk[i..i + start]);
-                            in_think = true;
-                            i = i + start + "<think>".len();
-                        } else {
-                            final_answer.push_str(&chunk[i..]);
-                            break;
-                        }
-                    } else {
-                        if let Some(end) = chunk[i..].find("</think>") {
-                            in_think = false;
-                            i = i + end + "</think>".len();
-                        } else {
-                            // drop remainder while in think
-                            break;
-                        }
-                    }
-                }
-
-                carry = utf8_tail(&chunk, 16);
-                utf8_buf.clear();
             }
             Err(e) => {
-                // incomplete sequence -> keep buffering
-                if e.error_len().is_none() {
-                    // do nothing
-                } else {
-                    // invalid bytes -> emit lossy and reset to recover
-                    let lossy = String::from_utf8_lossy(&utf8_buf).to_string();
-                    app.emit(
-                        "chat:delta",
-                        ChatDeltaPayload {
-                            chat_id: chat_id.clone(),
-                            delta: lossy,
-                        },
-                    )
-                    .map_err(|e| e.to_string())?;
-                    utf8_buf.clear();
-                }
+                carry = bytes.clone();
+                let valid_str = carry.drain(..e.valid_up_to()).collect::<Vec<u8>>();
+                
+                app.emit(
+                    "chat:delta",
+                    ChatDeltaPayload {
+                        chat_id: chat_id.clone(),
+                        delta: String::from_utf8(valid_str).unwrap()
+                    }
+                )
+                .map_err(|e| e.to_string())?;
             }
         }
 
@@ -534,6 +512,29 @@ async fn chat_stream(
 
         logits_i = 0;
     }
+
+    // Collate the final answer and cut out thinking tags greedily
+    let answer = std::str::from_utf8(&utf8_buf).map_err(|e| e.to_string())?;
+
+    let open = "<think>";
+    let close = "</think>";
+    let final_answer = match (answer.find(open), answer.rfind(close)) {
+        (Some(start_idx), Some(end_idx)) => {
+            // Is the closing tag actually after the opening tag?
+            if start_idx < end_idx {
+                let mut result = String::with_capacity(answer.len());
+                result.push_str(&answer[..start_idx]);
+                result.push_str(&answer[end_idx + close.len()..]);
+                
+                result
+            } else {
+                answer.to_string()
+            }
+        }
+
+        // If either tag is missing, return the original string
+        _ => answer.to_string(),
+    };
 
     // 8) Save assistant final answer
     {
@@ -583,7 +584,6 @@ pub fn run() {
                 let conn = open_db(&db_path)?;
                 init_db(&conn)?;
             }
-
             // Store state
             app.manage(EigenBrain {
                 model: Mutex::new(None),
@@ -591,7 +591,7 @@ pub fn run() {
                 is_loaded: AtomicBool::new(false),
                 db_path,
             });
-
+            
             // Emit model loading
             let _ = app_handle.emit("model:loading", ());
 
@@ -600,9 +600,12 @@ pub fn run() {
                 let state = app_handle.state::<EigenBrain>();
 
                 let result: Result<(), String> = (|| {
+                    let model_path = find_first_gguf_model(&app_handle)?;
+                    println!("[model] Loading from: {}", model_path.display());
+
                     let model = LlamaModel::load_from_file(
                         &state.backend,
-                        MODEL_PATH,
+                        &model_path,
                         &LlamaModelParams::default(),
                     )
                     .map_err(|e| e.to_string())?;
