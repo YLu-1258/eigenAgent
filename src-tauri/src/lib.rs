@@ -9,6 +9,7 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use reqwest_eventsource::{Event, EventSource};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -1603,6 +1604,66 @@ pub fn run() {
                 println!("[model] No model installed, emitting model:no_model event");
                 let _ = app_handle.emit("model:no_model", ());
             }
+
+            // Set up file watcher for models directory
+            let models_dir_for_watcher = get_models_dir(&app.handle().clone())?;
+            let app_handle_for_watcher = app.handle().clone();
+
+            std::thread::spawn(move || {
+                let (tx, rx) = std::sync::mpsc::channel();
+
+                let mut watcher = match RecommendedWatcher::new(
+                    move |res: Result<notify::Event, notify::Error>| {
+                        if let Ok(event) = res {
+                            // Only care about create/modify/remove events
+                            match event.kind {
+                                notify::EventKind::Create(_)
+                                | notify::EventKind::Modify(_)
+                                | notify::EventKind::Remove(_) => {
+                                    let _ = tx.send(());
+                                }
+                                _ => {}
+                            }
+                        }
+                    },
+                    Config::default(),
+                ) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        eprintln!("[watcher] Failed to create watcher: {}", e);
+                        return;
+                    }
+                };
+
+                if let Err(e) = watcher.watch(&models_dir_for_watcher, RecursiveMode::Recursive) {
+                    eprintln!("[watcher] Failed to watch models dir: {}", e);
+                    return;
+                }
+
+                println!("[watcher] Watching models directory: {}", models_dir_for_watcher.display());
+
+                // Debounce: wait for events and batch them
+                let mut last_emit = Instant::now();
+                loop {
+                    match rx.recv_timeout(Duration::from_millis(500)) {
+                        Ok(()) => {
+                            // Debounce: only emit if at least 1 second since last emit
+                            if last_emit.elapsed() > Duration::from_secs(1) {
+                                println!("[watcher] Models directory changed, emitting event");
+                                let _ = app_handle_for_watcher.emit("models:changed", ());
+                                last_emit = Instant::now();
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            // No events, continue
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                            println!("[watcher] Channel disconnected, stopping watcher");
+                            break;
+                        }
+                    }
+                }
+            });
 
             Ok(())
         })

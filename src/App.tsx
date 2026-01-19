@@ -269,7 +269,7 @@ export default function App() {
 
     // Computed value for current model name
     const currentModelName = useMemo(() => {
-        if (noModelInstalled || !currentModelId) return "No model installed";
+        if (noModelInstalled || !currentModelId) return "No model active!";
         const model = models.find((m) => m.id === currentModelId);
         return model?.name || currentModelId;
     }, [currentModelId, models, noModelInstalled]);
@@ -374,6 +374,7 @@ export default function App() {
         let unProgress: null | (() => void) = null;
         let unComplete: null | (() => void) = null;
         let unSwitching: null | (() => void) = null;
+        let unModelsChanged: null | (() => void) = null;
 
         (async () => {
             unProgress = await listen<DownloadProgressPayload>("download:progress", (e) => {
@@ -410,12 +411,19 @@ export default function App() {
                     console.error("Model switch error:", error);
                 }
             });
+
+            // Listen for file system changes in models directory
+            unModelsChanged = await listen("models:changed", () => {
+                console.log("[event] models:changed - refreshing model list");
+                refreshModels();
+            });
         })();
 
         return () => {
             unProgress?.();
             unComplete?.();
             unSwitching?.();
+            unModelsChanged?.();
         };
     }, []);
 
@@ -997,7 +1005,7 @@ export default function App() {
                                 <line x1="12" y1="17" x2="12.01" y2="17" />
                             </svg>
                             <div className="noModelWarningContent">
-                                <div className="noModelWarningTitle">No model installed</div>
+                                <div className="noModelWarningTitle">No model active</div>
                                 <div className="noModelWarningText">
                                     Click the <strong>Eigen</strong> button below to download a model and start chatting.
                                 </div>
