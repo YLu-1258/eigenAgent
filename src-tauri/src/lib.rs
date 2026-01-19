@@ -105,6 +105,7 @@ struct EigenBrain {
     model: Mutex<Option<LlamaModel>>,
     backend: LlamaBackend,
     is_loaded: AtomicBool,
+    is_cancelled: AtomicBool,
     db_path: PathBuf,
 }
 
@@ -359,6 +360,12 @@ fn delete_chat(args: DeleteChatArgs, state: State<'_, EigenBrain>) -> Result<(),
 
 
 #[tauri::command]
+fn cancel_generation(state: State<'_, EigenBrain>) -> Result<(), String> {
+    state.is_cancelled.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
 async fn chat_stream(
     args: ChatStreamArgs,
     app: AppHandle,
@@ -367,7 +374,10 @@ async fn chat_stream(
     let chat_id = args.chat_id;
     let prompt = args.prompt;
 
-    // 0) Ensure model exists
+    // 0) Reset cancellation flag
+    state.is_cancelled.store(false, Ordering::SeqCst);
+
+    // 1) Ensure model exists
     let model_guard = state.model.lock().map_err(|_| "Failed to lock model".to_string())?;
     let model = model_guard.as_ref().ok_or_else(|| "No model loaded".to_string())?;
 
@@ -458,6 +468,11 @@ async fn chat_stream(
     let mut carry: Vec<u8> = Vec::new(); // handles tags split across chunks
 
     for _ in 0..MAX_TOKENS {
+        // Check if generation was cancelled
+        if state.is_cancelled.load(Ordering::SeqCst) {
+            break;
+        }
+
         let next = sampler.sample(&ctx, logits_i);
         if next == model.token_eos() {
             break;
@@ -586,6 +601,7 @@ pub fn run() {
                 model: Mutex::new(None),
                 backend,
                 is_loaded: AtomicBool::new(false),
+                is_cancelled: AtomicBool::new(false),
                 db_path,
             });
             
@@ -635,6 +651,7 @@ pub fn run() {
             get_chat_messages,
             rename_chat,
             delete_chat,
+            cancel_generation,
             chat_stream
         ])
         .run(tauri::generate_context!())
