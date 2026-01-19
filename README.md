@@ -5,6 +5,7 @@ It runs quantized GGUF models on-device, streams responses token-by-token, rende
 
 No cloud. No API keys. Your data stays on your machine.
 
+![Example window of eigenAgent](sample_window.png)
 ---
 
 ## ✨ Features
