@@ -14,18 +14,25 @@ const DRAFT_CHAT_ID = "__draft__"
 
 type Role = "user" | "assistant";
 
+type ImageAttachment = {
+    id: string;
+    base64: string;
+    previewUrl: string;
+};
+
 type ChatMessage = {
     id: string;
     role: Role;
     content: string;
     thinking: string;
+    images: ImageAttachment[];
     isStreaming: boolean;
 };
 
 type ChatHistoryItem = {
     id: string;
     title: string;
-    updated_at: number; // unix ms
+    updated_at: number;
     preview: string;
 };
 
@@ -34,6 +41,7 @@ type ChatMessageRow = {
     role: string;
     content: string;
     thinking: string;
+    images: string[];
     created_at: number;
 };
 
@@ -58,29 +66,27 @@ function welcomeMessage(): ChatMessage {
     return {
         id: uid(),
         role: "assistant",
-        content: "Hi — ask me anything.\n\nI can render **Markdown** too.",
+        content: "Hi — ask me anything.\n\nI can render **Markdown** and see images too!",
         thinking: "",
+        images: [],
         isStreaming: false,
     };
 }
 
 export default function App() {
     const [messages, setMessages] = useState<ChatMessage[]>([welcomeMessage()]);
-
-    // null means: "draft chat" (not saved yet)
     const [chatId, setChatId] = useState<string>(DRAFT_CHAT_ID);
-
     const [modelReady, setModelReady] = useState(false);
     const [modelError, setModelError] = useState<string | null>(null);
-
     const [input, setInput] = useState("");
     const [isGenerating, setIsGenerating] = useState(false);
-
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
+    const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
 
     const currentAssistantIdRef = useRef<string | null>(null);
     const inThinkRef = useRef(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [selectedThinkingId, setSelectedThinkingId] = useState<string | null>(null);
     const selectedThinkingMsg = useMemo(
@@ -111,18 +117,24 @@ export default function App() {
         try {
             setChatId(chat_id);
 
-            const rows = await invoke<ChatMessageRow[]>("get_chat_messages", { chatId : chat_id });
+            const rows = await invoke<ChatMessageRow[]>("get_chat_messages", { chatId: chat_id });
 
             const loaded: ChatMessage[] = rows.map((r) => ({
                 id: r.id,
                 role: (r.role === "assistant" ? "assistant" : "user") as Role,
                 content: r.content,
                 thinking: r.thinking || "",
+                images: (r.images || []).map((base64) => ({
+                    id: uid(),
+                    base64,
+                    previewUrl: `data:image/jpeg;base64,${base64}`,
+                })),
                 isStreaming: false,
             }));
 
             setSelectedThinkingId(null);
             setIsGenerating(false);
+            setPendingImages([]);
             currentAssistantIdRef.current = null;
             inThinkRef.current = false;
 
@@ -132,16 +144,15 @@ export default function App() {
         }
     }
 
-
     function resetToDraftChat() {
         setChatId(DRAFT_CHAT_ID);
         setMessages([welcomeMessage()]);
         setSelectedThinkingId(null);
         setIsGenerating(false);
+        setPendingImages([]);
         currentAssistantIdRef.current = null;
         inThinkRef.current = false;
     }
-
 
     // Model loading events
     useEffect(() => {
@@ -216,17 +227,14 @@ export default function App() {
         };
     }, []);
 
-    // Chat streaming events (route by chat_id in payload)
+    // Chat streaming events
     useEffect(() => {
         let mounted = true;
 
         (async () => {
             unlistenBeginRef.current = await listen<ChatBeginPayload>("chat:begin", (event) => {
                 if (!mounted) return;
-
                 if (!event.payload) return;
-
-                // Only accept stream events for the currently open chat
                 if (event.payload.chat_id !== activeChatIdRef.current) return;
 
                 setIsGenerating(true);
@@ -237,7 +245,7 @@ export default function App() {
 
                 setMessages((prev) => [
                     ...prev,
-                    { id: assistantId, role: "assistant", content: "", thinking: "", isStreaming: true },
+                    { id: assistantId, role: "assistant", content: "", thinking: "", images: [], isStreaming: true },
                 ]);
 
                 setSelectedThinkingId(assistantId);
@@ -246,7 +254,6 @@ export default function App() {
             unlistenDeltaRef.current = await listen<ChatDeltaPayload>("chat:delta", (event) => {
                 if (!mounted) return;
                 if (!event.payload) return;
-
                 if (event.payload.chat_id !== activeChatIdRef.current) return;
 
                 const delta = event.payload.delta ?? "";
@@ -294,7 +301,6 @@ export default function App() {
             unlistenEndRef.current = await listen<ChatEndPayload>("chat:end", (event) => {
                 if (!mounted) return;
                 if (!event.payload) return;
-
                 if (event.payload.chat_id !== activeChatIdRef.current) return;
 
                 setIsGenerating(false);
@@ -309,7 +315,6 @@ export default function App() {
                     );
                 }
 
-                // after a response, refresh sidebar previews/timestamps
                 refreshChats();
             });
         })();
@@ -325,30 +330,72 @@ export default function App() {
         };
     }, [chatId]);
 
-    // // Auto-scroll (gate this later so it doesn't fight manual scrolling)
-    // useEffect(() => {
-    //     endRef.current?.scrollIntoView({ behavior: "smooth" });
-    // }, [messages]);
-
     const canSend = useMemo(
-        () => input.trim().length > 0 && !isGenerating && modelReady,
-        [input, isGenerating, modelReady]
+        () => (input.trim().length > 0 || pendingImages.length > 0) && !isGenerating && modelReady,
+        [input, pendingImages, isGenerating, modelReady]
     );
+
+    async function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
+        const files = e.target.files;
+        if (!files) return;
+
+        for (const file of Array.from(files)) {
+            if (!file.type.startsWith("image/")) continue;
+            if (file.size > 10 * 1024 * 1024) {
+                console.warn("Image too large, skipping:", file.name);
+                continue;
+            }
+
+            const base64 = await fileToBase64(file);
+            setPendingImages((prev) => [
+                ...prev,
+                {
+                    id: uid(),
+                    base64,
+                    previewUrl: `data:${file.type};base64,${base64}`,
+                },
+            ]);
+        }
+
+        // Reset file input
+        if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+        }
+    }
+
+    function fileToBase64(file: File): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const result = reader.result as string;
+                // Remove data URL prefix
+                resolve(result.split(",")[1]);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+    }
+
+    function removePendingImage(id: string) {
+        setPendingImages((prev) => prev.filter((img) => img.id !== id));
+    }
 
     async function handleSend() {
         const text = input.trim();
-        if (!text || isGenerating || !modelReady) return;
+        if ((!text && pendingImages.length === 0) || isGenerating || !modelReady) return;
+
+        const userImages = [...pendingImages];
 
         setMessages((prev) => [
             ...prev,
-            { id: uid(), role: "user", content: text, thinking: "", isStreaming: false },
+            { id: uid(), role: "user", content: text, thinking: "", images: userImages, isStreaming: false },
         ]);
         setInput("");
+        setPendingImages([]);
 
         try {
             setIsGenerating(true);
 
-            // Determine which chat_id we will use for this send
             let chat_id = chatId;
 
             if (chat_id === DRAFT_CHAT_ID) {
@@ -361,9 +408,9 @@ export default function App() {
                 args: {
                     chatId: chat_id,
                     prompt: text,
+                    images: userImages.map((img) => img.base64),
                 },
             });
-
         } catch (err) {
             setIsGenerating(false);
             inThinkRef.current = false;
@@ -376,12 +423,12 @@ export default function App() {
                     role: "assistant",
                     content: `Error: ${String(err)}`,
                     thinking: "",
+                    images: [],
                     isStreaming: false,
                 },
             ]);
         }
     }
-
 
     function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
         if (e.key === "Enter") {
@@ -414,8 +461,8 @@ export default function App() {
             <div className="screen">
                 <div className="loadingCard">
                     <div className="loadingSpinner"></div>
-                    <div>Loading model…</div>
-                    <div className="loadingSubtext">First load can take a moment</div>
+                    <div>Starting llama-server...</div>
+                    <div className="loadingSubtext">This may take a moment on first launch</div>
                 </div>
             </div>
         );
@@ -426,12 +473,7 @@ export default function App() {
             {/* LEFT SIDEBAR */}
             <div className={`sidebar ${sidebarOpen ? "open" : "closed"}`}>
                 <div className="sidebarHeader">
-                    <button
-                        className="newChatBtn"
-                        onClick={() => {
-                            resetToDraftChat();
-                        }}
-                    >
+                    <button className="newChatBtn" onClick={() => resetToDraftChat()}>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M12 5v14M5 12h14" />
                         </svg>
@@ -445,7 +487,6 @@ export default function App() {
                     {chatHistory.map((chat) => (
                         <div
                             key={chat.id}
-                            // Add the 'active' conditional class here
                             className={`historyItem ${chatId === chat.id ? "active" : ""}`}
                             onClick={() => {
                                 if (chatId !== chat.id) loadChat(chat.id);
@@ -513,6 +554,20 @@ export default function App() {
                                 )}
 
                                 <div className="msgStack">
+                                    {/* Display images if present */}
+                                    {m.images && m.images.length > 0 && (
+                                        <div className="messageImages">
+                                            {m.images.map((img) => (
+                                                <img
+                                                    key={img.id}
+                                                    src={img.previewUrl}
+                                                    alt="attachment"
+                                                    className="messageImage"
+                                                />
+                                            ))}
+                                        </div>
+                                    )}
+
                                     <div
                                         className={`bubble ${isUser ? "userBubble" : "assistantBubble"} ${
                                             !isUser && m.id === selectedThinkingId ? "selected" : ""
@@ -558,7 +613,41 @@ export default function App() {
                 </div>
 
                 <div className="inputRow">
+                    {/* Pending images preview */}
+                    {pendingImages.length > 0 && (
+                        <div className="pendingImages">
+                            {pendingImages.map((img) => (
+                                <div key={img.id} className="pendingImageThumb">
+                                    <img src={img.previewUrl} alt="pending" />
+                                    <button onClick={() => removePendingImage(img.id)} title="Remove image">
+                                        &times;
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
                     <div className="inputContainer">
+                        <button
+                            className="imageUploadBtn"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={isGenerating}
+                            title="Upload image"
+                        >
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                                <circle cx="8.5" cy="8.5" r="1.5" />
+                                <polyline points="21 15 16 10 5 21" />
+                            </svg>
+                        </button>
+                        <input
+                            type="file"
+                            ref={fileInputRef}
+                            accept="image/*"
+                            multiple
+                            onChange={handleImageSelect}
+                            style={{ display: "none" }}
+                        />
                         <input
                             value={input}
                             onChange={(e) => setInput(e.target.value)}

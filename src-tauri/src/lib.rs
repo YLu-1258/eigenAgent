@@ -1,6 +1,5 @@
 // src-tauri/src/lib.rs
 
-use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -8,20 +7,25 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use futures::StreamExt;
+use reqwest_eventsource::{Event, EventSource};
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
-use serde::Deserialize;
-use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
-use llama_cpp_2::sampling::LlamaSampler;
+use tauri_plugin_shell::ShellExt;
+use tauri_plugin_shell::process::CommandChild;
 
 const MAX_TOKENS: u32 = 8192;
+const SERVER_PORT: u16 = 8080;
 
 const SYSTEM_PROMPT: &str = r#"
 You are Eigen, a helpful AI assistant.
+
+When you receive a prompt, you must first share your thought process within <think>...</think> tags. After thinking, provide your final answer.
+
+Example:
+<think>The user is asking for the capital of France. I know that is Paris. I will state this clearly.</think>
+The capital of France is Paris.
 
 Rules:
 - Use Markdown for formatting.
@@ -29,21 +33,17 @@ Rules:
 - If you don't know, say "I don't know".
 "#;
 
+// ==================== Data Structures ====================
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ChatMsg {
-    pub role: String,   // "user" | "assistant"
-    pub content: String // assistant final answer only
+    pub role: String,
+    pub content: String,
+    #[serde(default)]
+    pub images: Vec<String>,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct Conversation {
-    pub id: String,
-    pub messages: Vec<ChatMsg>,
-    pub summary: String,
-}
-
-#[derive(serde::Serialize)]
+#[derive(Serialize)]
 pub struct ChatListItem {
     pub id: String,
     pub title: String,
@@ -51,12 +51,13 @@ pub struct ChatListItem {
     pub preview: String,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Serialize)]
 pub struct ChatMessageRow {
     pub id: String,
     pub role: String,
     pub content: String,
     pub thinking: String,
+    pub images: Vec<String>,
     pub created_at: i64,
 }
 
@@ -65,12 +66,8 @@ struct ChatStreamArgs {
     #[serde(alias = "chat_id", alias = "chatId")]
     chat_id: String,
     prompt: String,
-}
-
-#[derive(Deserialize)]
-struct ChatIdArgs {
-    #[serde(alias = "chat_id", alias = "chatId")]
-    chat_id: String,
+    #[serde(default)]
+    images: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -86,40 +83,108 @@ struct DeleteChatArgs {
     chat_id: String,
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ChatBeginPayload {
     pub chat_id: String,
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ChatDeltaPayload {
     pub chat_id: String,
     pub delta: String,
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ChatEndPayload {
     pub chat_id: String,
 }
 
-struct EigenBrain {
-    model: Mutex<Option<LlamaModel>>,
-    backend: LlamaBackend,
-    is_loaded: AtomicBool,
+// ==================== Server Manager ====================
+
+struct LlamaServerManager {
+    process: Mutex<Option<CommandChild>>,
+    server_url: String,
+    is_ready: AtomicBool,
     is_cancelled: AtomicBool,
     db_path: PathBuf,
+    model_path: PathBuf,
+    mmproj_path: Option<PathBuf>,
 }
 
-fn find_first_gguf_model(app: &AppHandle) -> Result<PathBuf, String> {
-    let models_dir = app.path().resource_dir().ok().map(|p| p.join("../../../models")).unwrap();
+// ==================== OpenAI API Types ====================
+
+#[derive(Serialize)]
+struct OpenAIRequest {
+    model: String,
+    messages: Vec<OpenAIMessage>,
+    stream: bool,
+    max_tokens: u32,
+}
+
+#[derive(Serialize, Clone)]
+struct OpenAIMessage {
+    role: String,
+    content: OpenAIContent,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(untagged)]
+enum OpenAIContent {
+    Text(String),
+    Parts(Vec<OpenAIContentPart>),
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "type")]
+enum OpenAIContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrlData },
+}
+
+#[derive(Serialize, Clone)]
+struct ImageUrlData {
+    url: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAIStreamResponse {
+    choices: Vec<OpenAIStreamChoice>,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAIStreamChoice {
+    delta: OpenAIDelta,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAIDelta {
+    content: Option<String>,
+}
+
+// ==================== Model File Discovery ====================
+
+fn find_model_files(app: &AppHandle) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let models_dir = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|p| p.join("../../../models"))
+        .unwrap();
 
     if !models_dir.exists() {
-        return Err(format!("Models directory not found: {}", models_dir.display()));
+        return Err(format!(
+            "Models directory not found: {}",
+            models_dir.display()
+        ));
     }
 
     let entries = std::fs::read_dir(&models_dir)
         .map_err(|e| format!("Failed to read models directory: {}", e))?;
-    
+
+    let mut main_model: Option<PathBuf> = None;
+    let mut mmproj: Option<PathBuf> = None;
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
@@ -128,31 +193,43 @@ fn find_first_gguf_model(app: &AppHandle) -> Result<PathBuf, String> {
         if path.is_file() {
             if let Some(ext) = path.extension() {
                 if ext.to_string_lossy().to_lowercase() == "gguf" {
-                    return Ok(path);
+                    let filename = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_lowercase();
+
+                    if filename.contains("mmproj") {
+                        mmproj = Some(path);
+                    } else if main_model.is_none() {
+                        main_model = Some(path);
+                    }
                 }
             }
         }
     }
 
-    Err("No .gguf model files found in ./models directory".to_string())
+    let model = main_model.ok_or_else(|| "No main .gguf model file found".to_string())?;
+    Ok((model, mmproj))
 }
 
+// ==================== Database Functions ====================
+
 fn unix_ms() -> i64 {
-    let now = SystemTime::now()
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::from_secs(0));
-    now.as_millis() as i64
+        .unwrap_or(Duration::from_secs(0))
+        .as_millis() as i64
 }
 
 fn open_db(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
-
-    // Make SQLite friendlier for app usage
-    conn.pragma_update(None, "journal_mode", "WAL").map_err(|e| e.to_string())?;
-    conn.pragma_update(None, "synchronous", "NORMAL").map_err(|e| e.to_string())?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(|e| e.to_string())?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(|e| e.to_string())?;
     conn.busy_timeout(Duration::from_millis(2000))
         .map_err(|e| e.to_string())?;
-
     Ok(conn)
 }
 
@@ -173,6 +250,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             role            TEXT NOT NULL,
             content         TEXT NOT NULL,
             thinking        TEXT NOT NULL DEFAULT '',
+            images          TEXT NOT NULL DEFAULT '[]',
             created_at      INTEGER NOT NULL,
             FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
@@ -183,7 +261,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
 
-    // Migration: add thinking column if it doesn't exist (for existing databases)
+    // Migration: add thinking column if missing
     let has_thinking: bool = conn
         .query_row(
             "SELECT COUNT(*) > 0 FROM pragma_table_info('messages') WHERE name = 'thinking'",
@@ -193,51 +271,49 @@ fn init_db(conn: &Connection) -> Result<(), String> {
         .unwrap_or(false);
 
     if !has_thinking {
-        conn.execute("ALTER TABLE messages ADD COLUMN thinking TEXT NOT NULL DEFAULT ''", [])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "ALTER TABLE messages ADD COLUMN thinking TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    // Migration: add images column if missing
+    let has_images: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('messages') WHERE name = 'images'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if !has_images {
+        conn.execute(
+            "ALTER TABLE messages ADD COLUMN images TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     Ok(())
 }
 
-fn build_prompt(system: &str, summary: &str, msgs: &[ChatMsg], max_turns: usize) -> String {
-    let recent = if msgs.len() > max_turns {
-        &msgs[msgs.len() - max_turns..]
-    } else {
-        msgs
-    };
-
-    let mut out = String::new();
-
-    out.push_str(&format!("<|im_start|>system\n{}<|im_end|>\n", system));
-
-    if !summary.trim().is_empty() {
-        out.push_str(&format!(
-            "<|im_start|>system\nConversation summary:\n{}<|im_end|>\n",
-            summary
-        ));
-    }
-
-    for m in recent {
-        if m.role == "user" {
-            out.push_str(&format!("<|im_start|>user\n{}<|im_end|>\n", m.content));
-        } else {
-            out.push_str(&format!("<|im_start|>assistant\n{}<|im_end|>\n", m.content));
-        }
-    }
-
-    out.push_str("<|im_start|>assistant\n");
-    out
-}
-
-fn insert_message(conn: &Connection, chat_id: &str, role: &str, content: &str, thinking: &str) -> Result<(), String> {
+fn insert_message(
+    conn: &Connection,
+    chat_id: &str,
+    role: &str,
+    content: &str,
+    thinking: &str,
+    images: &[String],
+) -> Result<(), String> {
     let now = unix_ms();
     let msg_id = uuid::Uuid::new_v4().to_string();
+    let images_json = serde_json::to_string(images).unwrap_or_else(|_| "[]".to_string());
 
     conn.execute(
-        "INSERT INTO messages (id, conversation_id, role, content, thinking, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![msg_id, chat_id, role, content, thinking, now],
+        "INSERT INTO messages (id, conversation_id, role, content, thinking, images, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![msg_id, chat_id, role, content, thinking, images_json, now],
     )
     .map_err(|e| e.to_string())?;
 
@@ -250,13 +326,44 @@ fn insert_message(conn: &Connection, chat_id: &str, role: &str, content: &str, t
     Ok(())
 }
 
+fn resolve_db_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("eigenAgent.sqlite3"))
+}
+
+// ==================== Server Lifecycle ====================
+
+async fn wait_for_server_ready(url: &str, timeout_secs: u64) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let health_url = format!("{}/health", url);
+    let start = std::time::Instant::now();
+
+    loop {
+        if start.elapsed().as_secs() > timeout_secs {
+            return Err("Server startup timeout".to_string());
+        }
+
+        match client.get(&health_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                return Ok(());
+            }
+            _ => {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
+// ==================== Tauri Commands ====================
+
 #[tauri::command]
-fn model_status(state: State<'_, EigenBrain>) -> Result<bool, String> {
-    Ok(state.is_loaded.load(Ordering::SeqCst))
+fn model_status(state: State<'_, LlamaServerManager>) -> Result<bool, String> {
+    Ok(state.is_ready.load(Ordering::SeqCst))
 }
 
 #[tauri::command]
-fn new_chat(app: AppHandle, state: State<'_, EigenBrain>) -> Result<String, String> {
+fn new_chat(app: AppHandle, state: State<'_, LlamaServerManager>) -> Result<String, String> {
     let chat_id = uuid::Uuid::new_v4().to_string();
     let now = unix_ms();
 
@@ -268,14 +375,12 @@ fn new_chat(app: AppHandle, state: State<'_, EigenBrain>) -> Result<String, Stri
     )
     .map_err(|e| e.to_string())?;
 
-    // Optional: you can emit an event to refresh sidebar, but frontend can just call list_chats.
     let _ = app.emit("chats:changed", ());
-
     Ok(chat_id)
 }
 
 #[tauri::command]
-fn list_chats(state: State<'_, EigenBrain>) -> Result<Vec<ChatListItem>, String> {
+fn list_chats(state: State<'_, LlamaServerManager>) -> Result<Vec<ChatListItem>, String> {
     let conn = open_db(&state.db_path)?;
 
     let mut stmt = conn
@@ -319,13 +424,16 @@ fn list_chats(state: State<'_, EigenBrain>) -> Result<Vec<ChatListItem>, String>
 }
 
 #[tauri::command]
-fn get_chat_messages(chat_id: String, state: State<'_, EigenBrain>) -> Result<Vec<ChatMessageRow>, String> {
+fn get_chat_messages(
+    chat_id: String,
+    state: State<'_, LlamaServerManager>,
+) -> Result<Vec<ChatMessageRow>, String> {
     let conn = open_db(&state.db_path)?;
 
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, role, content, thinking, created_at
+            SELECT id, role, content, thinking, images, created_at
             FROM messages
             WHERE conversation_id = ?1
             ORDER BY created_at ASC
@@ -335,12 +443,17 @@ fn get_chat_messages(chat_id: String, state: State<'_, EigenBrain>) -> Result<Ve
 
     let rows = stmt
         .query_map([chat_id], |row| {
+            let images_json: String = row.get(4)?;
+            let images: Vec<String> =
+                serde_json::from_str(&images_json).unwrap_or_else(|_| Vec::new());
+
             Ok(ChatMessageRow {
                 id: row.get(0)?,
                 role: row.get(1)?,
                 content: row.get(2)?,
                 thinking: row.get(3)?,
-                created_at: row.get(4)?,
+                images,
+                created_at: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -352,9 +465,8 @@ fn get_chat_messages(chat_id: String, state: State<'_, EigenBrain>) -> Result<Ve
     Ok(out)
 }
 
-
 #[tauri::command]
-fn rename_chat(args: RenameChatArgs, state: State<'_, EigenBrain>) -> Result<(), String> {
+fn rename_chat(args: RenameChatArgs, state: State<'_, LlamaServerManager>) -> Result<(), String> {
     let conn = open_db(&state.db_path)?;
     conn.execute(
         "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
@@ -364,20 +476,24 @@ fn rename_chat(args: RenameChatArgs, state: State<'_, EigenBrain>) -> Result<(),
     Ok(())
 }
 
-
 #[tauri::command]
-fn delete_chat(args: DeleteChatArgs, state: State<'_, EigenBrain>) -> Result<(), String> {
+fn delete_chat(args: DeleteChatArgs, state: State<'_, LlamaServerManager>) -> Result<(), String> {
     let conn = open_db(&state.db_path)?;
-    conn.execute("DELETE FROM messages WHERE conversation_id = ?1", params![args.chat_id.clone()])
-        .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM conversations WHERE id = ?1", params![args.chat_id])
-        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM messages WHERE conversation_id = ?1",
+        params![args.chat_id.clone()],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM conversations WHERE id = ?1",
+        params![args.chat_id],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-
 #[tauri::command]
-fn cancel_generation(state: State<'_, EigenBrain>) -> Result<(), String> {
+fn cancel_generation(state: State<'_, LlamaServerManager>) -> Result<(), String> {
     state.is_cancelled.store(true, Ordering::SeqCst);
     Ok(())
 }
@@ -386,40 +502,29 @@ fn cancel_generation(state: State<'_, EigenBrain>) -> Result<(), String> {
 async fn chat_stream(
     args: ChatStreamArgs,
     app: AppHandle,
-    state: State<'_, EigenBrain>,
+    state: State<'_, LlamaServerManager>,
 ) -> Result<(), String> {
     let chat_id = args.chat_id;
     let prompt = args.prompt;
+    let images = args.images;
 
-    // 0) Reset cancellation flag
+    // Reset cancellation flag
     state.is_cancelled.store(false, Ordering::SeqCst);
 
-    // 1) Ensure model exists
-    let model_guard = state.model.lock().map_err(|_| "Failed to lock model".to_string())?;
-    let model = model_guard.as_ref().ok_or_else(|| "No model loaded".to_string())?;
-
-    // 2) Save user message immediately
+    // Save user message immediately
     {
         let conn = open_db(&state.db_path)?;
-        insert_message(&conn, &chat_id, "user", &prompt, "")?;
+        insert_message(&conn, &chat_id, "user", &prompt, "", &images)?;
     }
 
-    // 2) Load summary + history for prompt building
-    let (summary, history_msgs) = {
+    // Load conversation history
+    let history_msgs = {
         let conn = open_db(&state.db_path)?;
-
-        let summary: String = conn
-            .query_row(
-                "SELECT summary FROM conversations WHERE id = ?1",
-                params![chat_id.clone()],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
 
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT role, content
+                SELECT role, content, images
                 FROM messages
                 WHERE conversation_id = ?1
                 ORDER BY created_at ASC
@@ -429,9 +534,14 @@ async fn chat_stream(
 
         let rows = stmt
             .query_map(params![chat_id.clone()], |row| {
+                let images_json: String = row.get(2)?;
+                let images: Vec<String> =
+                    serde_json::from_str(&images_json).unwrap_or_else(|_| Vec::new());
+
                 Ok(ChatMsg {
                     role: row.get(0)?,
                     content: row.get(1)?,
+                    images,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -440,38 +550,48 @@ async fn chat_stream(
         for r in rows {
             msgs.push(r.map_err(|e| e.to_string())?);
         }
-
-        (summary, msgs)
+        msgs
     };
 
-    // 3) Build prompt from DB history
-    let formatted_prompt = build_prompt(SYSTEM_PROMPT, &summary, &history_msgs, 20);
+    // Build OpenAI-format messages
+    let mut openai_messages: Vec<OpenAIMessage> = vec![OpenAIMessage {
+        role: "system".to_string(),
+        content: OpenAIContent::Text(SYSTEM_PROMPT.to_string()),
+    }];
 
-    // 4) Tokenize
-    let mut tokens = model
-        .str_to_token(&formatted_prompt, AddBos::Always)
-        .map_err(|e| e.to_string())?;
+    // Add recent history (last 20 turns)
+    let recent = if history_msgs.len() > 20 {
+        &history_msgs[history_msgs.len() - 20..]
+    } else {
+        &history_msgs[..]
+    };
 
-    // 5) Context
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(NonZeroU32::new(MAX_TOKENS).unwrap()));
-    let mut ctx = model
-        .new_context(&state.backend, ctx_params)
-        .map_err(|e| e.to_string())?;
+    for msg in recent {
+        let content = if msg.images.is_empty() {
+            OpenAIContent::Text(msg.content.clone())
+        } else {
+            let mut parts: Vec<OpenAIContentPart> = vec![OpenAIContentPart::Text {
+                text: msg.content.clone(),
+            }];
 
-    // 6) Prefill (logits only on last prompt token)
-    let mut batch = LlamaBatch::new(tokens.len(), 1);
-    for (i, &tok) in tokens.iter().enumerate() {
-        let want_logits = i + 1 == tokens.len();
-        batch.add(tok, i as i32, &[0], want_logits)
-            .map_err(|e| e.to_string())?;
+            for img_base64 in &msg.images {
+                parts.push(OpenAIContentPart::ImageUrl {
+                    image_url: ImageUrlData {
+                        url: format!("data:image/jpeg;base64,{}", img_base64),
+                    },
+                });
+            }
+
+            OpenAIContent::Parts(parts)
+        };
+
+        openai_messages.push(OpenAIMessage {
+            role: msg.role.clone(),
+            content,
+        });
     }
-    ctx.decode(&mut batch).map_err(|e| e.to_string())?;
 
-    let mut sampler = LlamaSampler::greedy();
-    let mut logits_i = (tokens.len() - 1) as i32;
-
-    // 7) Stream begin (include chat_id so UI can route it)
+    // Emit stream begin
     app.emit(
         "chat:begin",
         ChatBeginPayload {
@@ -480,103 +600,82 @@ async fn chat_stream(
     )
     .map_err(|e| e.to_string())?;
 
-    // Collect final answer (excluding <think> blocks)
-    let mut utf8_buf: Vec<u8> = Vec::new();
-    let mut carry: Vec<u8> = Vec::new(); // handles tags split across chunks
-
-    for _ in 0..MAX_TOKENS {
-        // Check if generation was cancelled
-        if state.is_cancelled.load(Ordering::SeqCst) {
-            break;
-        }
-
-        let next = sampler.sample(&ctx, logits_i);
-        if next == model.token_eos() {
-            break;
-        }
-
-        let mut bytes: Vec<u8> = Vec::new();
-        bytes.extend_from_slice(&carry);
-        bytes.extend(
-            model
-                .token_to_bytes(next, Special::Plaintext)
-                .map_err(|e| e.to_string())?
-        );
-        utf8_buf.extend_from_slice(&bytes);
-
-        match std::str::from_utf8(&bytes) {
-            Ok(valid_str) => {
-                app.emit(
-                    "chat:delta",
-                    ChatDeltaPayload {
-                        chat_id: chat_id.clone(),
-                        delta: valid_str.to_string()
-                    }
-                )
-                .map_err(|e| e.to_string())?;
-                carry.clear();
-            }
-            Err(e) => {
-                carry = bytes.clone();
-                let valid_str = carry.drain(..e.valid_up_to()).collect::<Vec<u8>>();
-                
-                app.emit(
-                    "chat:delta",
-                    ChatDeltaPayload {
-                        chat_id: chat_id.clone(),
-                        delta: String::from_utf8(valid_str).unwrap()
-                    }
-                )
-                .map_err(|e| e.to_string())?;
-            }
-        }
-
-        // Decode step token (1-token batch => logits index 0)
-        tokens.push(next);
-        let pos = (tokens.len() - 1) as i32;
-
-        let mut step_batch = LlamaBatch::new(1, 1);
-        step_batch.add(next, pos, &[0], true).map_err(|e| e.to_string())?;
-        ctx.decode(&mut step_batch).map_err(|e| e.to_string())?;
-
-        logits_i = 0;
-    }
-
-    // Collate the final answer and extract thinking
-    // Use lossy conversion to handle incomplete UTF-8 sequences at the end
-    let answer = String::from_utf8_lossy(&utf8_buf);
-
-    let open = "<think>";
-    let close = "</think>";
-    let (final_answer, thinking) = match (answer.find(open), answer.rfind(close)) {
-        (Some(start_idx), Some(end_idx)) => {
-            // Is the closing tag actually after the opening tag?
-            if start_idx < end_idx {
-                // Extract thinking content (without the tags)
-                let thinking_content = &answer[start_idx + open.len()..end_idx];
-
-                // Build final answer without thinking
-                let mut result = String::with_capacity(answer.len());
-                result.push_str(&answer[..start_idx]);
-                result.push_str(&answer[end_idx + close.len()..]);
-
-                (result, thinking_content.to_string())
-            } else {
-                (answer.to_string(), String::new())
-            }
-        }
-
-        // If either tag is missing, return the original string with no thinking
-        _ => (answer.to_string(), String::new()),
+    // Make streaming request to llama-server
+    let client = reqwest::Client::new();
+    let request_body = OpenAIRequest {
+        model: "qwen3-vl".to_string(),
+        messages: openai_messages,
+        stream: true,
+        max_tokens: MAX_TOKENS,
     };
 
-    // 8) Save assistant final answer with thinking
-    {
-        let conn = open_db(&state.db_path)?;
-        insert_message(&conn, &chat_id, "assistant", &final_answer, &thinking)?;
+    let request_builder = client
+        .post(format!("{}/v1/chat/completions", state.server_url))
+        .header("Content-Type", "application/json")
+        .json(&request_body);
+
+    let mut es = EventSource::new(request_builder).map_err(|e| e.to_string())?;
+    let mut full_response = String::new();
+
+    while let Some(event) = es.next().await {
+        // Check for cancellation
+        if state.is_cancelled.load(Ordering::SeqCst) {
+            es.close();
+            break;
+        }
+
+        match event {
+            Ok(Event::Open) => {}
+            Ok(Event::Message(msg)) => {
+                if msg.data == "[DONE]" {
+                    break;
+                }
+
+                if let Ok(parsed) = serde_json::from_str::<OpenAIStreamResponse>(&msg.data) {
+                    if let Some(choice) = parsed.choices.first() {
+                        if let Some(content) = &choice.delta.content {
+                            full_response.push_str(content);
+
+                            app.emit(
+                                "chat:delta",
+                                ChatDeltaPayload {
+                                    chat_id: chat_id.clone(),
+                                    delta: content.clone(),
+                                },
+                            )
+                            .map_err(|e| e.to_string())?;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[SSE Error] {:?}", e);
+                break;
+            }
+        }
     }
 
-    // 9) Stream end
+    // Extract thinking from response
+    let open = "<think>";
+    let close = "</think>";
+    let (final_answer, thinking) = match (full_response.find(open), full_response.rfind(close)) {
+        (Some(start_idx), Some(end_idx)) if start_idx < end_idx => {
+            let thinking_content = &full_response[start_idx + open.len()..end_idx];
+            let mut result = String::with_capacity(full_response.len());
+            result.push_str(&full_response[..start_idx]);
+            result.push_str(&full_response[end_idx + close.len()..]);
+            (result, thinking_content.to_string())
+        }
+        _ => (full_response.clone(), String::new()),
+    };
+
+    // Save assistant response
+    {
+        let conn = open_db(&state.db_path)?;
+        insert_message(&conn, &chat_id, "assistant", &final_answer, &thinking, &[])?;
+    }
+
+    // Emit stream end
     app.emit(
         "chat:end",
         ChatEndPayload {
@@ -585,28 +684,17 @@ async fn chat_stream(
     )
     .map_err(|e| e.to_string())?;
 
-    // Optional: notify sidebar refresh
     let _ = app.emit("chats:changed", ());
 
     Ok(())
 }
 
-fn resolve_db_path(app: &AppHandle) -> Result<PathBuf, String> {
-    // Tauri v2 style path resolver
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
-
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.join("eigenAgent.sqlite3"))
-}
+// ==================== App Entry Point ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let backend = LlamaBackend::init().expect("Failed to init llama backend");
-
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
 
@@ -614,52 +702,93 @@ pub fn run() {
             let db_path = resolve_db_path(&app_handle)?;
             {
                 println!("[db] path = {}", db_path.display());
-
                 let conn = open_db(&db_path)?;
                 init_db(&conn)?;
             }
+
+            // Find model files
+            let (model_path, mmproj_path) = find_model_files(&app_handle)?;
+            println!("[model] Main model: {}", model_path.display());
+            if let Some(ref mmproj) = mmproj_path {
+                println!("[model] Vision projector: {}", mmproj.display());
+            }
+
+            let server_url = format!("http://127.0.0.1:{}", SERVER_PORT);
+
             // Store state
-            app.manage(EigenBrain {
-                model: Mutex::new(None),
-                backend,
-                is_loaded: AtomicBool::new(false),
+            app.manage(LlamaServerManager {
+                process: Mutex::new(None),
+                server_url: server_url.clone(),
+                is_ready: AtomicBool::new(false),
                 is_cancelled: AtomicBool::new(false),
                 db_path,
+                model_path: model_path.clone(),
+                mmproj_path: mmproj_path.clone(),
             });
-            
+
             // Emit model loading
             let _ = app_handle.emit("model:loading", ());
 
-            // Load model in background
-            tauri::async_runtime::spawn_blocking(move || {
-                let state = app_handle.state::<EigenBrain>();
+            // Spawn llama-server in background
+            let model_path_clone = model_path.clone();
+            let mmproj_path_clone = mmproj_path.clone();
 
-                let result: Result<(), String> = (|| {
-                    let model_path = find_first_gguf_model(&app_handle)?;
-                    println!("[model] Loading from: {}", model_path.display());
+            tauri::async_runtime::spawn(async move {
+                let state = app_handle.state::<LlamaServerManager>();
 
-                    let model = LlamaModel::load_from_file(
-                        &state.backend,
-                        &model_path,
-                        &LlamaModelParams::default(),
-                    )
-                    .map_err(|e| e.to_string())?;
+                // Build sidecar command
+                let shell = app_handle.shell();
+                let mut cmd = shell.sidecar("llama-server").expect("Failed to create sidecar command");
 
-                    *state
-                        .model
-                        .lock()
-                        .map_err(|_| "lock failed".to_string())? = Some(model);
+                cmd = cmd
+                    .args(["-m", model_path_clone.to_str().unwrap()])
+                    .args(["--host", "127.0.0.1"])
+                    .args(["--port", &SERVER_PORT.to_string()])
+                    .args(["--ctx-size", "8192"])
+                    .args(["--n-predict", &MAX_TOKENS.to_string()]);
 
-                    state.is_loaded.store(true, Ordering::SeqCst);
-                    Ok(())
-                })();
+                // Add vision projector if available
+                if let Some(ref mmproj) = mmproj_path_clone {
+                    cmd = cmd.args(["--mmproj", mmproj.to_str().unwrap()]);
+                }
 
-                match result {
-                    Ok(()) => {
-                        let _ = app_handle.emit("model:ready", ());
+                // Spawn the server
+                match cmd.spawn() {
+                    Ok((mut rx, child)) => {
+                        // Store the child process
+                        if let Ok(mut guard) = state.process.lock() {
+                            *guard = Some(child);
+                        }
+
+                        // Log server output in background
+                        tauri::async_runtime::spawn(async move {
+                            while let Some(event) = rx.recv().await {
+                                match event {
+                                    tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
+                                        println!("[llama-server] {}", String::from_utf8_lossy(&line));
+                                    }
+                                    tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
+                                        eprintln!("[llama-server] {}", String::from_utf8_lossy(&line));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        });
+
+                        // Wait for server to be ready
+                        match wait_for_server_ready(&state.server_url, 120).await {
+                            Ok(()) => {
+                                state.is_ready.store(true, Ordering::SeqCst);
+                                let _ = app_handle.emit("model:ready", ());
+                                println!("[llama-server] Ready!");
+                            }
+                            Err(e) => {
+                                let _ = app_handle.emit("model:error", e);
+                            }
+                        }
                     }
-                    Err(err) => {
-                        let _ = app_handle.emit("model:error", err);
+                    Err(e) => {
+                        let _ = app_handle.emit("model:error", format!("Failed to spawn llama-server: {}", e));
                     }
                 }
             });
