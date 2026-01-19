@@ -232,33 +232,32 @@ export default function App() {
         };
     }, []);
 
-    // Chat streaming events (global listeners)
+    // Chat streaming events
     useEffect(() => {
-        let unlistenBegin: null | (() => void) = null;
-        let unlistenDelta: null | (() => void) = null;
-        let unlistenEnd: null | (() => void) = null;
+        let mounted = true;
 
         (async () => {
-            unlistenBegin = await listen<ChatBeginPayload>("chat:begin", (event) => {
+            unlistenBeginRef.current = await listen<ChatBeginPayload>("chat:begin", (event) => {
+                if (!mounted) return;
                 if (!event.payload) return;
+                if (event.payload.chat_id !== activeChatIdRef.current) return;
 
-                if (event.payload.chat_id === activeChatIdRef.current) {
-                    setIsGenerating(true);
-                    inThinkRef.current = false;
+                setIsGenerating(true);
+                inThinkRef.current = false;
 
-                    const assistantId = uid();
-                    currentAssistantIdRef.current = assistantId;
+                const assistantId = uid();
+                currentAssistantIdRef.current = assistantId;
 
-                    setMessages((prev) => [
-                        ...prev,
-                        { id: assistantId, role: "assistant", content: "", thinking: "", images: [], isStreaming: true },
-                    ]);
+                setMessages((prev) => [
+                    ...prev,
+                    { id: assistantId, role: "assistant", content: "", thinking: "", images: [], isStreaming: true },
+                ]);
 
-                    setSelectedThinkingId(assistantId);
-                }
+                setSelectedThinkingId(assistantId);
             });
 
-            unlistenDelta = await listen<ChatDeltaPayload>("chat:delta", (event) => {
+            unlistenDeltaRef.current = await listen<ChatDeltaPayload>("chat:delta", (event) => {
+                if (!mounted) return;
                 if (!event.payload) return;
                 if (event.payload.chat_id !== activeChatIdRef.current) return;
 
@@ -280,36 +279,77 @@ export default function App() {
                 );
             });
 
-            unlistenEnd = await listen<ChatEndPayload>("chat:end", (event) => {
+            unlistenEndRef.current = await listen<ChatEndPayload>("chat:end", (event) => {
+                if (!mounted) return;
                 if (!event.payload) return;
+                if (event.payload.chat_id !== activeChatIdRef.current) return;
 
-                if (event.payload.chat_id === activeChatIdRef.current) {
-                    setIsGenerating(false);
-                    inThinkRef.current = false;
+                setIsGenerating(false);
+                inThinkRef.current = false;
 
-                    const assistantId = currentAssistantIdRef.current;
-                    currentAssistantIdRef.current = null;
+                const assistantId = currentAssistantIdRef.current;
+                currentAssistantIdRef.current = null;
 
-                    if (assistantId) {
-                        setMessages((prev) =>
-                            prev.map((m) =>
-                                m.id === assistantId
-                                    ? { ...m, isStreaming: false, durationMs: event.payload.duration_ms }
-                                    : m
-                            )
-                        );
-                    }
+                if (assistantId) {
+                    setMessages((prev) =>
+                        prev.map((m) =>
+                            m.id === assistantId
+                                ? { ...m, isStreaming: false, durationMs: event.payload.duration_ms }
+                                : m
+                        )
+                    );
                 }
+
                 refreshChats();
             });
         })();
 
         return () => {
-            unlistenBegin?.();
-            unlistenDelta?.();
-            unlistenEnd?.();
+            mounted = false;
+            unlistenBeginRef.current?.();
+            unlistenDeltaRef.current?.();
+            unlistenEndRef.current?.();
+            unlistenBeginRef.current = null;
+            unlistenDeltaRef.current = null;
+            unlistenEndRef.current = null;
+        };
+    }, [chatId]);
+
+    // Global paste handler
+    useEffect(() => {
+        const handlePaste = (event: ClipboardEvent) => {
+            const items = event.clipboardData?.items;
+            if (!items) return;
+
+            for (const item of items) {
+                if (item.type.startsWith("image")) {
+                    const file = item.getAsFile();
+                    if (!file) continue;
+
+                    event.preventDefault();
+
+                    fileToBase64(file).then((base64) => {
+                        setPendingImages((prev) => [
+                            ...prev,
+                            {
+                                id: uid(),
+                                base64,
+                                previewUrl: `data:${file.type};base64,${base64}`,
+                            },
+                        ]);
+                    });
+                }
+            }
+        };
+
+        window.addEventListener("paste", handlePaste);
+
+        return () => {
+            window.removeEventListener("paste", handlePaste);
         };
     }, []);
+
+
 
     const canSend = useMemo(
         () => (input.trim().length > 0 || pendingImages.length > 0) && !isGenerating && modelReady,
@@ -382,15 +422,7 @@ export default function App() {
             if (chat_id === DRAFT_CHAT_ID) {
                 chat_id = await invoke<string>("new_chat");
                 setChatId(chat_id);
-
-                const newTitle = text.split(" ").slice(0, 5).join(" ");
-                const newChatItem: ChatHistoryItem = {
-                    id: chat_id,
-                    title: newTitle || "New chat",
-                    updated_at: Date.now(),
-                    preview: text,
-                };
-                setChatHistory((prev) => [newChatItem, ...prev]);
+                await refreshChats();
             }
 
             await invoke("chat_stream", {
