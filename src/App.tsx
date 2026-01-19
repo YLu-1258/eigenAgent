@@ -232,32 +232,33 @@ export default function App() {
         };
     }, []);
 
-    // Chat streaming events
+    // Chat streaming events (global listeners)
     useEffect(() => {
-        let mounted = true;
+        let unlistenBegin: null | (() => void) = null;
+        let unlistenDelta: null | (() => void) = null;
+        let unlistenEnd: null | (() => void) = null;
 
         (async () => {
-            unlistenBeginRef.current = await listen<ChatBeginPayload>("chat:begin", (event) => {
-                if (!mounted) return;
+            unlistenBegin = await listen<ChatBeginPayload>("chat:begin", (event) => {
                 if (!event.payload) return;
-                if (event.payload.chat_id !== activeChatIdRef.current) return;
 
-                setIsGenerating(true);
-                inThinkRef.current = false;
+                if (event.payload.chat_id === activeChatIdRef.current) {
+                    setIsGenerating(true);
+                    inThinkRef.current = false;
 
-                const assistantId = uid();
-                currentAssistantIdRef.current = assistantId;
+                    const assistantId = uid();
+                    currentAssistantIdRef.current = assistantId;
 
-                setMessages((prev) => [
-                    ...prev,
-                    { id: assistantId, role: "assistant", content: "", thinking: "", images: [], isStreaming: true },
-                ]);
+                    setMessages((prev) => [
+                        ...prev,
+                        { id: assistantId, role: "assistant", content: "", thinking: "", images: [], isStreaming: true },
+                    ]);
 
-                setSelectedThinkingId(assistantId);
+                    setSelectedThinkingId(assistantId);
+                }
             });
 
-            unlistenDeltaRef.current = await listen<ChatDeltaPayload>("chat:delta", (event) => {
-                if (!mounted) return;
+            unlistenDelta = await listen<ChatDeltaPayload>("chat:delta", (event) => {
                 if (!event.payload) return;
                 if (event.payload.chat_id !== activeChatIdRef.current) return;
 
@@ -279,41 +280,36 @@ export default function App() {
                 );
             });
 
-            unlistenEndRef.current = await listen<ChatEndPayload>("chat:end", (event) => {
-                if (!mounted) return;
+            unlistenEnd = await listen<ChatEndPayload>("chat:end", (event) => {
                 if (!event.payload) return;
-                if (event.payload.chat_id !== activeChatIdRef.current) return;
 
-                setIsGenerating(false);
-                inThinkRef.current = false;
+                if (event.payload.chat_id === activeChatIdRef.current) {
+                    setIsGenerating(false);
+                    inThinkRef.current = false;
 
-                const assistantId = currentAssistantIdRef.current;
-                currentAssistantIdRef.current = null;
+                    const assistantId = currentAssistantIdRef.current;
+                    currentAssistantIdRef.current = null;
 
-                if (assistantId) {
-                    setMessages((prev) =>
-                        prev.map((m) =>
-                            m.id === assistantId
-                                ? { ...m, isStreaming: false, durationMs: event.payload.duration_ms }
-                                : m
-                        )
-                    );
+                    if (assistantId) {
+                        setMessages((prev) =>
+                            prev.map((m) =>
+                                m.id === assistantId
+                                    ? { ...m, isStreaming: false, durationMs: event.payload.duration_ms }
+                                    : m
+                            )
+                        );
+                    }
                 }
-
                 refreshChats();
             });
         })();
 
         return () => {
-            mounted = false;
-            unlistenBeginRef.current?.();
-            unlistenDeltaRef.current?.();
-            unlistenEndRef.current?.();
-            unlistenBeginRef.current = null;
-            unlistenDeltaRef.current = null;
-            unlistenEndRef.current = null;
+            unlistenBegin?.();
+            unlistenDelta?.();
+            unlistenEnd?.();
         };
-    }, [chatId]);
+    }, []);
 
     // Global paste handler
     useEffect(() => {
@@ -422,7 +418,15 @@ export default function App() {
             if (chat_id === DRAFT_CHAT_ID) {
                 chat_id = await invoke<string>("new_chat");
                 setChatId(chat_id);
-                await refreshChats();
+
+                const newTitle = text.split(" ").slice(0, 5).join(" ");
+                const newChatItem: ChatHistoryItem = {
+                    id: chat_id,
+                    title: newTitle || "New chat",
+                    updated_at: Date.now(),
+                    preview: text,
+                };
+                setChatHistory((prev) => [newChatItem, ...prev]);
             }
 
             await invoke("chat_stream", {
