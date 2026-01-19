@@ -117,6 +117,20 @@ export default function App() {
         }
     }
 
+    async function handleDeleteChat(chat_id: string, e: React.MouseEvent) {
+        e.stopPropagation(); // Prevent triggering the chat load
+        try {
+            await invoke("delete_chat", { args: { chatId: chat_id } });
+            // If the deleted chat is the current one, reset to draft
+            if (chatId === chat_id) {
+                resetToDraftChat();
+            }
+            // Chat list will auto-refresh via chats:changed event
+        } catch (err) {
+            console.error("[delete_chat] error", err);
+        }
+    }
+
     async function loadChat(chat_id: string) {
         try {
             setChatId(chat_id);
@@ -515,11 +529,22 @@ export default function App() {
                             style={{ cursor: "pointer" }}
                             title={chat.preview}
                         >
-                            <div className="historyTitle">{chat.title}</div>
-                            <div className="historyPreview">{chat.preview}</div>
-                            <div className="historyTime">
-                                {new Date(chat.updated_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                            <div className="historyItemContent">
+                                <div className="historyTitle">{chat.title}</div>
+                                <div className="historyPreview">{chat.preview}</div>
+                                <div className="historyTime">
+                                    {new Date(chat.updated_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                                </div>
                             </div>
+                            <button
+                                className="deleteBtn"
+                                onClick={(e) => handleDeleteChat(chat.id, e)}
+                                title="Delete chat"
+                            >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14" />
+                                </svg>
+                            </button>
                         </div>
                     ))}
                 </div>

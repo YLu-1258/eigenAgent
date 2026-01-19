@@ -498,7 +498,7 @@ fn rename_chat(args: RenameChatArgs, state: State<'_, LlamaServerManager>) -> Re
 }
 
 #[tauri::command]
-fn delete_chat(args: DeleteChatArgs, state: State<'_, LlamaServerManager>) -> Result<(), String> {
+fn delete_chat(args: DeleteChatArgs, app: AppHandle, state: State<'_, LlamaServerManager>) -> Result<(), String> {
     let conn = open_db(&state.db_path)?;
     conn.execute(
         "DELETE FROM messages WHERE conversation_id = ?1",
@@ -510,6 +510,8 @@ fn delete_chat(args: DeleteChatArgs, state: State<'_, LlamaServerManager>) -> Re
         params![args.chat_id],
     )
     .map_err(|e| e.to_string())?;
+
+    let _ = app.emit("chats:changed", ());
     Ok(())
 }
 
