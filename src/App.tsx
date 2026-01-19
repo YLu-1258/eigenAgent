@@ -23,7 +23,7 @@ type ImageAttachment = {
 type FileAttachment = {
     id: string;
     name: string;
-    type: "text" | "code" | "document";
+    type: "text" | "code";
     content: string;
     language?: string; // for code files
 };
@@ -659,7 +659,7 @@ export default function App() {
 
     const TEXT_EXTENSIONS = ["txt", "log", "csv", "tsv", "env", "gitignore", "editorconfig"];
 
-    function getFileCategory(filename: string, mimeType: string): { type: "image" | "text" | "code" | "document"; language?: string } {
+    function getFileCategory(filename: string, mimeType: string): { type: "image" | "text" | "code" | "unsupported"; language?: string } {
         const ext = filename.split(".").pop()?.toLowerCase() || "";
 
         if (mimeType.startsWith("image/")) {
@@ -674,15 +674,16 @@ export default function App() {
             return { type: "text" };
         }
 
-        if (mimeType === "application/pdf" || ext === "pdf") {
-            return { type: "document" };
+        // PDFs and other binary documents are not supported yet
+        if (mimeType === "application/pdf" || ext === "pdf" || ext === "docx" || ext === "doc" || ext === "xlsx" || ext === "xls") {
+            return { type: "unsupported" };
         }
 
         if (mimeType.startsWith("text/") || mimeType === "application/json" || mimeType === "application/xml") {
             return { type: "text" };
         }
 
-        // Default to text for unknown types
+        // Default to text for unknown types (may fail for binary files)
         return { type: "text" };
     }
 
@@ -690,8 +691,15 @@ export default function App() {
         const files = e.target.files;
         if (!files) return;
 
+        const unsupportedFiles: string[] = [];
+
         for (const file of Array.from(files)) {
             const category = getFileCategory(file.name, file.type);
+
+            if (category.type === "unsupported") {
+                unsupportedFiles.push(file.name);
+                continue;
+            }
 
             if (category.type === "image") {
                 if (file.size > 10 * 1024 * 1024) {
@@ -708,7 +716,7 @@ export default function App() {
                     },
                 ]);
             } else {
-                // Text, code, or document files
+                // Text or code files
                 if (file.size > 5 * 1024 * 1024) {
                     console.warn("File too large, skipping:", file.name);
                     continue;
@@ -721,7 +729,7 @@ export default function App() {
                         {
                             id: uid(),
                             name: file.name,
-                            type: category.type as "text" | "code" | "document",
+                            type: category.type as "text" | "code",
                             content,
                             language: category.language,
                         },
@@ -730,6 +738,11 @@ export default function App() {
                     console.error("Failed to read file:", file.name, err);
                 }
             }
+        }
+
+        // Show warning for unsupported files
+        if (unsupportedFiles.length > 0) {
+            alert(`The following files are not supported yet:\n${unsupportedFiles.join("\n")}\n\nSupported: images, text files, and code files.`);
         }
 
         // Reset file input
@@ -1274,7 +1287,7 @@ export default function App() {
                         <input
                             type="file"
                             ref={fileInputRef}
-                            accept="image/*,.txt,.md,.json,.xml,.csv,.log,.py,.js,.ts,.tsx,.jsx,.c,.cpp,.h,.hpp,.java,.rb,.go,.rs,.swift,.kt,.php,.sh,.sql,.html,.css,.scss,.yaml,.yml,.toml,.ini,.cfg,.conf,.env"
+                            accept="image/*,.txt,.md,.json,.xml,.csv,.tsv,.log,.env,.py,.js,.ts,.tsx,.jsx,.c,.cpp,.h,.hpp,.java,.rb,.go,.rs,.swift,.kt,.scala,.php,.sh,.bash,.zsh,.sql,.r,.lua,.pl,.hs,.ml,.clj,.ex,.exs,.erl,.dart,.vue,.svelte,.html,.htm,.css,.scss,.sass,.less,.yaml,.yml,.toml,.ini,.cfg,.conf,.gitignore,.editorconfig,Dockerfile,Makefile"
                             multiple
                             onChange={handleFileSelect}
                             style={{ display: "none" }}
