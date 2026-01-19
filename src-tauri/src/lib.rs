@@ -18,7 +18,7 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 
-const MAX_TOKENS: u32 = 4096;
+const MAX_TOKENS: u32 = 8192;
 
 const SYSTEM_PROMPT: &str = r#"
 You are Eigen, a helpful AI assistant.
@@ -56,6 +56,7 @@ pub struct ChatMessageRow {
     pub id: String,
     pub role: String,
     pub content: String,
+    pub thinking: String,
     pub created_at: i64,
 }
 
@@ -171,6 +172,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             conversation_id TEXT NOT NULL,
             role            TEXT NOT NULL,
             content         TEXT NOT NULL,
+            thinking        TEXT NOT NULL DEFAULT '',
             created_at      INTEGER NOT NULL,
             FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
@@ -180,6 +182,20 @@ fn init_db(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|e| e.to_string())?;
+
+    // Migration: add thinking column if it doesn't exist (for existing databases)
+    let has_thinking: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('messages') WHERE name = 'thinking'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if !has_thinking {
+        conn.execute("ALTER TABLE messages ADD COLUMN thinking TEXT NOT NULL DEFAULT ''", [])
+            .map_err(|e| e.to_string())?;
+    }
 
     Ok(())
 }
@@ -214,14 +230,14 @@ fn build_prompt(system: &str, summary: &str, msgs: &[ChatMsg], max_turns: usize)
     out
 }
 
-fn insert_message(conn: &Connection, chat_id: &str, role: &str, content: &str) -> Result<(), String> {
+fn insert_message(conn: &Connection, chat_id: &str, role: &str, content: &str, thinking: &str) -> Result<(), String> {
     let now = unix_ms();
     let msg_id = uuid::Uuid::new_v4().to_string();
 
     conn.execute(
-        "INSERT INTO messages (id, conversation_id, role, content, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![msg_id, chat_id, role, content, now],
+        "INSERT INTO messages (id, conversation_id, role, content, thinking, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![msg_id, chat_id, role, content, thinking, now],
     )
     .map_err(|e| e.to_string())?;
 
@@ -309,7 +325,7 @@ fn get_chat_messages(chat_id: String, state: State<'_, EigenBrain>) -> Result<Ve
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, role, content, created_at
+            SELECT id, role, content, thinking, created_at
             FROM messages
             WHERE conversation_id = ?1
             ORDER BY created_at ASC
@@ -323,7 +339,8 @@ fn get_chat_messages(chat_id: String, state: State<'_, EigenBrain>) -> Result<Ve
                 id: row.get(0)?,
                 role: row.get(1)?,
                 content: row.get(2)?,
-                created_at: row.get(3)?,
+                thinking: row.get(3)?,
+                created_at: row.get(4)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -381,10 +398,10 @@ async fn chat_stream(
     let model_guard = state.model.lock().map_err(|_| "Failed to lock model".to_string())?;
     let model = model_guard.as_ref().ok_or_else(|| "No model loaded".to_string())?;
 
-    // 1) Save user message immediately
+    // 2) Save user message immediately
     {
         let conn = open_db(&state.db_path)?;
-        insert_message(&conn, &chat_id, "user", &prompt)?;
+        insert_message(&conn, &chat_id, "user", &prompt, "")?;
     }
 
     // 2) Load summary + history for prompt building
@@ -525,33 +542,38 @@ async fn chat_stream(
         logits_i = 0;
     }
 
-    // Collate the final answer and cut out thinking tags greedily
-    let answer = std::str::from_utf8(&utf8_buf).map_err(|e| e.to_string())?;
+    // Collate the final answer and extract thinking
+    // Use lossy conversion to handle incomplete UTF-8 sequences at the end
+    let answer = String::from_utf8_lossy(&utf8_buf);
 
     let open = "<think>";
     let close = "</think>";
-    let final_answer = match (answer.find(open), answer.rfind(close)) {
+    let (final_answer, thinking) = match (answer.find(open), answer.rfind(close)) {
         (Some(start_idx), Some(end_idx)) => {
             // Is the closing tag actually after the opening tag?
             if start_idx < end_idx {
+                // Extract thinking content (without the tags)
+                let thinking_content = &answer[start_idx + open.len()..end_idx];
+
+                // Build final answer without thinking
                 let mut result = String::with_capacity(answer.len());
                 result.push_str(&answer[..start_idx]);
                 result.push_str(&answer[end_idx + close.len()..]);
-                
-                result
+
+                (result, thinking_content.to_string())
             } else {
-                answer.to_string()
+                (answer.to_string(), String::new())
             }
         }
 
-        // If either tag is missing, return the original string
-        _ => answer.to_string(),
+        // If either tag is missing, return the original string with no thinking
+        _ => (answer.to_string(), String::new()),
     };
 
-    // 8) Save assistant final answer
+    // 8) Save assistant final answer with thinking
     {
         let conn = open_db(&state.db_path)?;
-        insert_message(&conn, &chat_id, "assistant", &final_answer)?;
+        insert_message(&conn, &chat_id, "assistant", &final_answer, &thinking)?;
     }
 
     // 9) Stream end

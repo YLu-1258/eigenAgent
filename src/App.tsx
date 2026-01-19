@@ -33,6 +33,7 @@ type ChatMessageRow = {
     id: string;
     role: string;
     content: string;
+    thinking: string;
     created_at: number;
 };
 
@@ -113,11 +114,11 @@ export default function App() {
             const rows = await invoke<ChatMessageRow[]>("get_chat_messages", { chatId : chat_id });
 
             const loaded: ChatMessage[] = rows.map((r) => ({
-            id: r.id,
-            role: (r.role === "assistant" ? "assistant" : "user") as Role,
-            content: r.content,
-            thinking: "",        // backend strips thinking right now
-            isStreaming: false,
+                id: r.id,
+                role: (r.role === "assistant" ? "assistant" : "user") as Role,
+                content: r.content,
+                thinking: r.thinking || "",
+                isStreaming: false,
             }));
 
             setSelectedThinkingId(null);
