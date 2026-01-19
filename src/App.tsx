@@ -151,6 +151,8 @@ export default function App() {
     const [chatId, setChatId] = useState<string>(DRAFT_CHAT_ID);
     const [modelReady, setModelReady] = useState(false);
     const [modelError, setModelError] = useState<string | null>(null);
+    const [noModelInstalled, setNoModelInstalled] = useState(false);
+    const [initialCheckDone, setInitialCheckDone] = useState(false);
     const [input, setInput] = useState("");
     const [isGenerating, setIsGenerating] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -267,10 +269,10 @@ export default function App() {
 
     // Computed value for current model name
     const currentModelName = useMemo(() => {
-        if (!currentModelId) return "No model";
+        if (noModelInstalled || !currentModelId) return "No model installed";
         const model = models.find((m) => m.id === currentModelId);
         return model?.name || currentModelId;
-    }, [currentModelId, models]);
+    }, [currentModelId, models, noModelInstalled]);
 
     async function handleDeleteChat(chat_id: string, e: React.MouseEvent) {
         e.stopPropagation(); // Prevent triggering the chat load
@@ -333,20 +335,29 @@ export default function App() {
         let unReady: null | (() => void) = null;
         let unErr: null | (() => void) = null;
         let unLoading: null | (() => void) = null;
+        let unNoModel: null | (() => void) = null;
 
         (async () => {
             unLoading = await listen("model:loading", () => {
                 console.log("[event] model:loading");
+                setNoModelInstalled(false);
             });
 
             unReady = await listen("model:ready", () => {
                 console.log("[event] model:ready");
                 setModelReady(true);
+                setNoModelInstalled(false);
             });
 
             unErr = await listen<string>("model:error", (e) => {
                 console.log("[event] model:error", e.payload);
                 setModelError(e.payload);
+            });
+
+            unNoModel = await listen("model:no_model", () => {
+                console.log("[event] model:no_model");
+                setNoModelInstalled(true);
+                setModelReady(false);
             });
         })();
 
@@ -354,6 +365,7 @@ export default function App() {
             unLoading?.();
             unReady?.();
             unErr?.();
+            unNoModel?.();
         };
     }, []);
 
@@ -390,6 +402,7 @@ export default function App() {
                 if (status === "ready") {
                     setModelSwitching(false);
                     setModelReady(true);
+                    setNoModelInstalled(false);
                     setCurrentModelId(model_id);
                     refreshModels();
                 } else if (status === "error") {
@@ -406,16 +419,44 @@ export default function App() {
         };
     }, []);
 
-    // Load models on mount
+    // Load models on mount and check if any are installed
     useEffect(() => {
-        refreshModels();
+        async function checkModels() {
+            try {
+                const modelList = await invoke<ModelInfo[]>("list_models");
+                setModels(modelList);
+
+                // Find current model
+                const current = modelList.find((m) => m.is_current);
+                if (current) {
+                    setCurrentModelId(current.id);
+                    setNoModelInstalled(false);
+                } else {
+                    // Check if any models are downloaded
+                    const hasDownloaded = modelList.some((m) => m.download_status === "downloaded");
+                    if (!hasDownloaded) {
+                        setNoModelInstalled(true);
+                    }
+                }
+            } catch (e) {
+                console.log("[list_models] error", e);
+            } finally {
+                setInitialCheckDone(true);
+            }
+        }
+        checkModels();
     }, []);
 
-    // Poll model_status so we don't miss ready event
+    // Poll model_status so we don't miss ready event (but stop if no model installed)
     useEffect(() => {
         let cancelled = false;
 
         async function poll() {
+            if (noModelInstalled) {
+                console.log("[poll] no model installed, stopping poll");
+                return;
+            }
+
             try {
                 const ready = await invoke<boolean>("model_status");
                 if (cancelled) return;
@@ -437,7 +478,7 @@ export default function App() {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [noModelInstalled]);
 
     // Load chat list initially + whenever backend says it changed
     useEffect(() => {
@@ -700,13 +741,27 @@ export default function App() {
         );
     }
 
-    if (!modelReady) {
+    // Show loading screen only when we have a model and it's loading
+    // Don't show loading if initial check isn't done yet or if no model is installed
+    if (!modelReady && initialCheckDone && !noModelInstalled) {
         return (
             <div className="screen">
                 <div className="loadingCard">
                     <div className="loadingSpinner"></div>
                     <div>Starting llama-server...</div>
                     <div className="loadingSubtext">This may take a moment on first launch</div>
+                </div>
+            </div>
+        );
+    }
+
+    // Show a brief loading state while checking for models
+    if (!initialCheckDone) {
+        return (
+            <div className="screen">
+                <div className="loadingCard">
+                    <div className="loadingSpinner"></div>
+                    <div>Loading...</div>
                 </div>
             </div>
         );
@@ -887,13 +942,13 @@ export default function App() {
                     )}
 
                     <div
-                        className={`userSection ${modelCatalogOpen ? "active" : ""}`}
+                        className={`userSection ${modelCatalogOpen ? "active" : ""} ${noModelInstalled ? "warning" : ""}`}
                         onClick={() => setModelCatalogOpen(!modelCatalogOpen)}
                     >
-                        <div className="userAvatar">E</div>
+                        <div className={`userAvatar ${noModelInstalled ? "warning" : ""}`}>E</div>
                         <div className="userInfo">
                             <div className="userName">Eigen</div>
-                            <div className="currentModel">
+                            <div className={`currentModel ${noModelInstalled ? "warning" : ""}`}>
                                 {modelSwitching ? "Switching..." : currentModelName}
                             </div>
                         </div>
@@ -934,6 +989,21 @@ export default function App() {
                 </div>
 
                 <div className="chatScroll niceScroll">
+                    {noModelInstalled && (
+                        <div className="noModelWarning">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                                <line x1="12" y1="9" x2="12" y2="13" />
+                                <line x1="12" y1="17" x2="12.01" y2="17" />
+                            </svg>
+                            <div className="noModelWarningContent">
+                                <div className="noModelWarningTitle">No model installed</div>
+                                <div className="noModelWarningText">
+                                    Click the <strong>Eigen</strong> button below to download a model and start chatting.
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     {messages.map((m) => {
                         const isUser = m.role === "user";
                         const showPlaceholder = !isUser && m.isStreaming && m.content.trim().length === 0;

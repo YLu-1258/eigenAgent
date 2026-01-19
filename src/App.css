@@ -1266,3 +1266,72 @@ html, body, #root {
   background: rgba(239, 68, 68, 0.15);
   color: #ef4444;
 }
+
+/* ==================== NO MODEL WARNING ==================== */
+.userSection.warning {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  animation: warningPulse 2s ease-in-out infinite;
+}
+
+.userSection.warning:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+@keyframes warningPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.1);
+  }
+}
+
+.userAvatar.warning {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.4);
+}
+
+.currentModel.warning {
+  color: #ef4444;
+  font-weight: 500;
+}
+
+.noModelWarning {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 20px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 14px;
+  margin-bottom: 20px;
+}
+
+.noModelWarning svg {
+  color: #ef4444;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.noModelWarningContent {
+  flex: 1;
+}
+
+.noModelWarningTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ef4444;
+  margin-bottom: 4px;
+}
+
+.noModelWarningText {
+  font-size: 13px;
+  color: #9ca3af;
+  line-height: 1.5;
+}
+
+.noModelWarningText strong {
+  color: #e5e5e5;
+}

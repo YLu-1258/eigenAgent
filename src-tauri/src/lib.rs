@@ -1455,7 +1455,7 @@ pub fn run() {
             println!("[catalog] loaded {} models", catalog.models.len());
 
             // Find model files - try catalog first, then legacy
-            let (model_path, mmproj_path, current_model_id) = {
+            let found_model: Option<(PathBuf, Option<PathBuf>, String)> = {
                 // First try to find a downloaded model from catalog
                 let mut found: Option<(PathBuf, Option<PathBuf>, String)> = None;
 
@@ -1480,26 +1480,29 @@ pub fn run() {
                     }
                 }
 
-                found.ok_or_else(|| {
-                    format!(
-                        "No models found.\n\n\
-                        Please download a model from the model catalog or place .gguf files in:\n\
-                        • {}\n\n\
-                        Click the Eigen button in the sidebar to browse available models.",
-                        models_dir.display()
-                    )
-                })?
+                found
             };
-
-            println!("[model] Main model: {}", model_path.display());
-            println!("[model] Current model ID: {}", current_model_id);
-            if let Some(ref mmproj) = mmproj_path {
-                println!("[model] Vision projector: {}", mmproj.display());
-            }
 
             let server_url = format!("http://127.0.0.1:{}", SERVER_PORT);
 
-            // Store state with new Mutex-based fields
+            // Store state - use empty path if no model found
+            let (model_path, mmproj_path, current_model_id) = match found_model {
+                Some((mp, mmpp, id)) => {
+                    println!("[model] Main model: {}", mp.display());
+                    println!("[model] Current model ID: {}", id);
+                    if let Some(ref mmproj) = mmpp {
+                        println!("[model] Vision projector: {}", mmproj.display());
+                    }
+                    (mp, mmpp, Some(id))
+                }
+                None => {
+                    println!("[model] No models found - app will start without a model");
+                    (PathBuf::new(), None, None)
+                }
+            };
+
+            let has_model = current_model_id.is_some();
+
             app.manage(LlamaServerManager {
                 process: Mutex::new(None),
                 server_url: server_url.clone(),
@@ -1509,88 +1512,97 @@ pub fn run() {
                 models_dir,
                 model_path: Mutex::new(model_path.clone()),
                 mmproj_path: Mutex::new(mmproj_path.clone()),
-                current_model_id: Mutex::new(Some(current_model_id.clone())),
+                current_model_id: Mutex::new(current_model_id),
                 active_downloads: Mutex::new(HashMap::new()),
                 downloading_progress: Mutex::new(HashMap::new()),
             });
 
-            // Emit model loading
-            let _ = app_handle.emit("model:loading", ());
+            print!("[app] Do we have model: {}\n", has_model);
 
-            // Spawn llama-server in background
-            let model_path_clone = model_path.clone();
-            let mmproj_path_clone = mmproj_path.clone();
+            // Only start the server if we have a model
+            if has_model {
+                // Emit model loading
+                let _ = app_handle.emit("model:loading", ());
 
-            tauri::async_runtime::spawn(async move {
-                let state = app_handle.state::<LlamaServerManager>();
+                // Spawn llama-server in background
+                let model_path_clone = model_path.clone();
+                let mmproj_path_clone = mmproj_path.clone();
 
-                // Build sidecar command
-                let shell = app_handle.shell();
-                let mut cmd = shell
-                    .sidecar("llama-server")
-                    .expect("Failed to create sidecar command");
+                tauri::async_runtime::spawn(async move {
+                    let state = app_handle.state::<LlamaServerManager>();
 
-                cmd = cmd
-                    .args(["-m", model_path_clone.to_str().unwrap()])
-                    .args(["--host", "127.0.0.1"])
-                    .args(["--port", &SERVER_PORT.to_string()])
-                    .args(["--ctx-size", "8192"])
-                    .args(["--n-predict", &MAX_TOKENS.to_string()]);
+                    // Build sidecar command
+                    let shell = app_handle.shell();
+                    let mut cmd = shell
+                        .sidecar("llama-server")
+                        .expect("Failed to create sidecar command");
 
-                // Add vision projector if available
-                if let Some(ref mmproj) = mmproj_path_clone {
-                    cmd = cmd.args(["--mmproj", mmproj.to_str().unwrap()]);
-                }
+                    cmd = cmd
+                        .args(["-m", model_path_clone.to_str().unwrap()])
+                        .args(["--host", "127.0.0.1"])
+                        .args(["--port", &SERVER_PORT.to_string()])
+                        .args(["--ctx-size", "8192"])
+                        .args(["--n-predict", &MAX_TOKENS.to_string()]);
 
-                // Spawn the server
-                match cmd.spawn() {
-                    Ok((mut rx, child)) => {
-                        // Store the child process
-                        if let Ok(mut guard) = state.process.lock() {
-                            *guard = Some(child);
-                        }
+                    // Add vision projector if available
+                    if let Some(ref mmproj) = mmproj_path_clone {
+                        cmd = cmd.args(["--mmproj", mmproj.to_str().unwrap()]);
+                    }
 
-                        // Log server output in background
-                        tauri::async_runtime::spawn(async move {
-                            while let Some(event) = rx.recv().await {
-                                match event {
-                                    tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-                                        println!(
-                                            "[llama-server] {}",
-                                            String::from_utf8_lossy(&line)
-                                        );
+                    // Spawn the server
+                    match cmd.spawn() {
+                        Ok((mut rx, child)) => {
+                            // Store the child process
+                            if let Ok(mut guard) = state.process.lock() {
+                                *guard = Some(child);
+                            }
+
+                            // Log server output in background
+                            tauri::async_runtime::spawn(async move {
+                                while let Some(event) = rx.recv().await {
+                                    match event {
+                                        tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
+                                            println!(
+                                                "[llama-server] {}",
+                                                String::from_utf8_lossy(&line)
+                                            );
+                                        }
+                                        tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
+                                            eprintln!(
+                                                "[llama-server] {}",
+                                                String::from_utf8_lossy(&line)
+                                            );
+                                        }
+                                        _ => {}
                                     }
-                                    tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-                                        eprintln!(
-                                            "[llama-server] {}",
-                                            String::from_utf8_lossy(&line)
-                                        );
-                                    }
-                                    _ => {}
+                                }
+                            });
+
+                            // Wait for server to be ready
+                            match wait_for_server_ready(&state.server_url, 120).await {
+                                Ok(()) => {
+                                    state.is_ready.store(true, Ordering::SeqCst);
+                                    let _ = app_handle.emit("model:ready", ());
+                                    println!("[llama-server] Ready!");
+                                }
+                                Err(e) => {
+                                    let _ = app_handle.emit("model:error", e);
                                 }
                             }
-                        });
-
-                        // Wait for server to be ready
-                        match wait_for_server_ready(&state.server_url, 120).await {
-                            Ok(()) => {
-                                state.is_ready.store(true, Ordering::SeqCst);
-                                let _ = app_handle.emit("model:ready", ());
-                                println!("[llama-server] Ready!");
-                            }
-                            Err(e) => {
-                                let _ = app_handle.emit("model:error", e);
-                            }
+                        }
+                        Err(e) => {
+                            let _ = app_handle.emit(
+                                "model:error",
+                                format!("Failed to spawn llama-server: {}", e),
+                            );
                         }
                     }
-                    Err(e) => {
-                        let _ = app_handle.emit(
-                            "model:error",
-                            format!("Failed to spawn llama-server: {}", e),
-                        );
-                    }
-                }
-            });
+                });
+            } else {
+                // Emit no_model event so frontend knows to show warning
+                println!("[model] No model installed, emitting model:no_model event");
+                let _ = app_handle.emit("model:no_model", ());
+            }
 
             Ok(())
         })
