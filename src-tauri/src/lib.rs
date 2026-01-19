@@ -910,9 +910,11 @@ async fn chat_stream(
 
                         if !content_delta.is_empty() {
                             full_response_content.push_str(&content_delta);
+                            print!("{}", content_delta);
                         }
                         if !reasoning_delta.is_empty() {
                             full_response_thinking.push_str(&reasoning_delta);
+                            print!("{}", reasoning_delta)
                         }
                         
                         app.emit(
