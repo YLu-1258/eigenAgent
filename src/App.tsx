@@ -62,6 +62,37 @@ type ChatEndPayload = {
     duration_ms: number;
 };
 
+// Model Catalog Types
+type ModelCapabilities = {
+    vision: boolean;
+    thinking: boolean;
+};
+
+type ModelInfo = {
+    id: string;
+    name: string;
+    description: string;
+    size_label: string;
+    capabilities: ModelCapabilities;
+    download_status: string; // "not_downloaded" | "downloading" | "downloaded"
+    download_percent: number | null;
+    is_current: boolean;
+};
+
+type DownloadProgressPayload = {
+    model_id: string;
+    downloaded_bytes: number;
+    total_bytes: number;
+    percent: number;
+    speed_bps: number;
+};
+
+type ModelSwitchPayload = {
+    model_id: string;
+    status: string; // "stopping" | "starting" | "ready" | "error"
+    error?: string;
+};
+
 function uid() {
     return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -126,6 +157,13 @@ export default function App() {
     const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
     const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
 
+    // Model catalog state
+    const [models, setModels] = useState<ModelInfo[]>([]);
+    const [currentModelId, setCurrentModelId] = useState<string | null>(null);
+    const [modelCatalogOpen, setModelCatalogOpen] = useState(false);
+    const [modelSwitching, setModelSwitching] = useState(false);
+    const [downloadProgress, setDownloadProgress] = useState<Record<string, { percent: number; speed: number }>>({});
+
     const currentAssistantIdRef = useRef<string | null>(null);
     const inThinkRef = useRef(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -154,6 +192,85 @@ export default function App() {
             console.log("[list_chats] error", e);
         }
     }
+
+    // Model catalog functions
+    async function refreshModels() {
+        try {
+            const modelList = await invoke<ModelInfo[]>("list_models");
+            setModels(modelList);
+
+            // Find current model
+            const current = modelList.find((m) => m.is_current);
+            if (current) {
+                setCurrentModelId(current.id);
+            }
+        } catch (e) {
+            console.log("[list_models] error", e);
+        }
+    }
+
+    async function handleSwitchModel(modelId: string) {
+        if (modelSwitching || isGenerating) return;
+
+        try {
+            setModelSwitching(true);
+            setModelReady(false);
+            await invoke("switch_model", { args: { modelId } });
+        } catch (e) {
+            console.error("[switch_model] error", e);
+            setModelSwitching(false);
+        }
+    }
+
+    async function handleDownloadModel(modelId: string) {
+        try {
+            await invoke("download_model", { args: { modelId } });
+        } catch (e) {
+            console.error("[download_model] error", e);
+        }
+    }
+
+    async function handleCancelDownload(modelId: string) {
+        try {
+            await invoke("cancel_download", { args: { modelId } });
+            // Remove from local progress tracking
+            setDownloadProgress((prev) => {
+                const next = { ...prev };
+                delete next[modelId];
+                return next;
+            });
+        } catch (e) {
+            console.error("[cancel_download] error", e);
+        }
+    }
+
+    async function handleDeleteModel(modelId: string) {
+        try {
+            await invoke("delete_model", { args: { modelId } });
+            await refreshModels();
+        } catch (e) {
+            console.error("[delete_model] error", e);
+        }
+    }
+
+    function formatBytes(bytes: number): string {
+        if (bytes === 0) return "0 B";
+        const k = 1024;
+        const sizes = ["B", "KB", "MB", "GB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+    }
+
+    function formatSpeed(bps: number): string {
+        return formatBytes(bps) + "/s";
+    }
+
+    // Computed value for current model name
+    const currentModelName = useMemo(() => {
+        if (!currentModelId) return "No model";
+        const model = models.find((m) => m.id === currentModelId);
+        return model?.name || currentModelId;
+    }, [currentModelId, models]);
 
     async function handleDeleteChat(chat_id: string, e: React.MouseEvent) {
         e.stopPropagation(); // Prevent triggering the chat load
@@ -238,6 +355,60 @@ export default function App() {
             unReady?.();
             unErr?.();
         };
+    }, []);
+
+    // Model catalog events
+    useEffect(() => {
+        let unProgress: null | (() => void) = null;
+        let unComplete: null | (() => void) = null;
+        let unSwitching: null | (() => void) = null;
+
+        (async () => {
+            unProgress = await listen<DownloadProgressPayload>("download:progress", (e) => {
+                const { model_id, percent, speed_bps } = e.payload;
+                setDownloadProgress((prev) => ({
+                    ...prev,
+                    [model_id]: { percent, speed: speed_bps },
+                }));
+            });
+
+            unComplete = await listen<string>("download:complete", (e) => {
+                const modelId = e.payload;
+                console.log("[event] download:complete", modelId);
+                setDownloadProgress((prev) => {
+                    const next = { ...prev };
+                    delete next[modelId];
+                    return next;
+                });
+                refreshModels();
+            });
+
+            unSwitching = await listen<ModelSwitchPayload>("model:switching", (e) => {
+                const { model_id, status, error } = e.payload;
+                console.log("[event] model:switching", status, model_id, error);
+
+                if (status === "ready") {
+                    setModelSwitching(false);
+                    setModelReady(true);
+                    setCurrentModelId(model_id);
+                    refreshModels();
+                } else if (status === "error") {
+                    setModelSwitching(false);
+                    console.error("Model switch error:", error);
+                }
+            });
+        })();
+
+        return () => {
+            unProgress?.();
+            unComplete?.();
+            unSwitching?.();
+        };
+    }, []);
+
+    // Load models on mount
+    useEffect(() => {
+        refreshModels();
     }, []);
 
     // Poll model_status so we don't miss ready event
@@ -404,8 +575,8 @@ export default function App() {
 
 
     const canSend = useMemo(
-        () => (input.trim().length > 0 || pendingImages.length > 0) && !isGenerating && modelReady,
-        [input, pendingImages, isGenerating, modelReady]
+        () => (input.trim().length > 0 || pendingImages.length > 0) && !isGenerating && modelReady && !modelSwitching,
+        [input, pendingImages, isGenerating, modelReady, modelSwitching]
     );
 
     async function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -588,9 +759,155 @@ export default function App() {
                 </div>
 
                 <div className="sidebarFooter">
-                    <div className="userSection">
+                    {modelCatalogOpen && (
+                        <div className="modelCatalog">
+                            <div className="modelCatalogHeader">
+                                <span>Models</span>
+                                <button
+                                    className="closeCatalogBtn"
+                                    onClick={() => setModelCatalogOpen(false)}
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <path d="M18 6L6 18M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <div className="modelList niceScroll">
+                                {models.length === 0 ? (
+                                    <div className="modelListEmpty">No models in catalog</div>
+                                ) : (
+                                    models.map((model) => {
+                                        const progress = downloadProgress[model.id];
+                                        const isDownloading = model.download_status === "downloading" || progress;
+                                        const isDownloaded = model.download_status === "downloaded";
+                                        const isCurrent = model.is_current;
+
+                                        return (
+                                            <div
+                                                key={model.id}
+                                                className={`modelItem ${isCurrent ? "current" : ""} ${isDownloaded && !isCurrent ? "clickable" : ""}`}
+                                                onClick={() => {
+                                                    if (isDownloaded && !isCurrent && !modelSwitching) {
+                                                        handleSwitchModel(model.id);
+                                                        setModelCatalogOpen(false);
+                                                    }
+                                                }}
+                                            >
+                                                <div className="modelItemHeader">
+                                                    <div className="modelItemTitle">
+                                                        <span className="modelName">{model.name}</span>
+                                                        {model.size_label && (
+                                                            <span className="modelSize">{model.size_label}</span>
+                                                        )}
+                                                    </div>
+                                                    <div className="modelBadges">
+                                                        {model.capabilities.vision && (
+                                                            <span className="capabilityBadge vision" title="Vision capable">
+                                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                                                    <circle cx="12" cy="12" r="3" />
+                                                                </svg>
+                                                            </span>
+                                                        )}
+                                                        {model.capabilities.thinking && (
+                                                            <span className="capabilityBadge thinking" title="Extended thinking">
+                                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                                    <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                                                </svg>
+                                                            </span>
+                                                        )}
+                                                        {isCurrent && (
+                                                            <span className="currentBadge">Active</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className="modelDescription">{model.description}</div>
+
+                                                {isDownloading && (
+                                                    <div className="modelDownloadProgress">
+                                                        <div className="progressBar">
+                                                            <div
+                                                                className="progressFill"
+                                                                style={{ width: `${progress?.percent ?? model.download_percent ?? 0}%` }}
+                                                            />
+                                                        </div>
+                                                        <div className="progressInfo">
+                                                            <span>{(progress?.percent ?? model.download_percent ?? 0).toFixed(1)}%</span>
+                                                            {progress && <span>{formatSpeed(progress.speed)}</span>}
+                                                            <button
+                                                                className="cancelDownloadBtn"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleCancelDownload(model.id);
+                                                                }}
+                                                            >
+                                                                Cancel
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {!isDownloaded && !isDownloading && (
+                                                    <button
+                                                        className="downloadBtn"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleDownloadModel(model.id);
+                                                        }}
+                                                    >
+                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                                                        </svg>
+                                                        Download
+                                                    </button>
+                                                )}
+
+                                                {isDownloaded && !isCurrent && (
+                                                    <button
+                                                        className="deleteModelBtn"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (confirm(`Delete ${model.name}?`)) {
+                                                                handleDeleteModel(model.id);
+                                                            }
+                                                        }}
+                                                        title="Delete model"
+                                                    >
+                                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                            <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14" />
+                                                        </svg>
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    <div
+                        className={`userSection ${modelCatalogOpen ? "active" : ""}`}
+                        onClick={() => setModelCatalogOpen(!modelCatalogOpen)}
+                    >
                         <div className="userAvatar">E</div>
-                        <div className="userName">Eigen</div>
+                        <div className="userInfo">
+                            <div className="userName">Eigen</div>
+                            <div className="currentModel">
+                                {modelSwitching ? "Switching..." : currentModelName}
+                            </div>
+                        </div>
+                        <svg
+                            className={`chevron ${modelCatalogOpen ? "open" : ""}`}
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                        >
+                            <path d="M18 15l-6-6-6 6" />
+                        </svg>
                     </div>
                 </div>
             </div>

@@ -34,6 +34,9 @@
     ],
     "externalBin": [
       "binaries/llama-server"
+    ],
+    "resources": [
+      "resources/*"
     ]
   }
 }
