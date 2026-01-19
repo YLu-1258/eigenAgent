@@ -164,29 +164,22 @@ struct OpenAIDelta {
 
 // ==================== Model File Discovery ====================
 
-fn find_model_files(app: &AppHandle) -> Result<(PathBuf, Option<PathBuf>), String> {
-    let models_dir = app
-        .path()
-        .resource_dir()
-        .ok()
-        .map(|p| p.join("../../../models"))
-        .unwrap();
-
+/// Scans a directory for .gguf model files.
+/// Returns (main_model, optional_mmproj) if found.
+fn scan_models_dir(models_dir: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
     if !models_dir.exists() {
-        return Err(format!(
-            "Models directory not found: {}",
-            models_dir.display()
-        ));
+        return None;
     }
 
-    let entries = std::fs::read_dir(&models_dir)
-        .map_err(|e| format!("Failed to read models directory: {}", e))?;
+    let entries = match std::fs::read_dir(models_dir) {
+        Ok(e) => e,
+        Err(_) => return None,
+    };
 
     let mut main_model: Option<PathBuf> = None;
     let mut mmproj: Option<PathBuf> = None;
 
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+    for entry in entries.flatten() {
         let path = entry.path();
 
         if path.is_file() {
@@ -208,8 +201,54 @@ fn find_model_files(app: &AppHandle) -> Result<(PathBuf, Option<PathBuf>), Strin
         }
     }
 
-    let model = main_model.ok_or_else(|| "No main .gguf model file found".to_string())?;
-    Ok((model, mmproj))
+    main_model.map(|m| (m, mmproj))
+}
+
+fn find_model_files(app: &AppHandle) -> Result<(PathBuf, Option<PathBuf>), String> {
+    // 1. Check app data directory first (production location)
+    let app_data_models = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|p| p.join("models"));
+
+    if let Some(ref dir) = app_data_models {
+        // Create the directory if it doesn't exist (so users know where to put models)
+        let _ = std::fs::create_dir_all(dir);
+
+        if let Some(result) = scan_models_dir(dir) {
+            println!("[model] Found models in app data: {}", dir.display());
+            return Ok(result);
+        }
+    }
+
+    // 2. Fall back to development models folder (relative to project root)
+    let dev_models = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|p| p.join("../../../models"));
+
+    if let Some(ref dir) = dev_models {
+        if let Some(result) = scan_models_dir(dir) {
+            println!("[model] Found models in dev folder: {}", dir.display());
+            return Ok(result);
+        }
+    }
+
+    // No models found - provide helpful error message
+    let app_data_path = app_data_models
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "~/.config/eigenAgent/models".to_string());
+
+    Err(format!(
+        "No .gguf model files found.\n\n\
+        Please place your model files in one of these locations:\n\
+        • {} (recommended for production)\n\
+        • ./models/ (development only)\n\n\
+        The model file should have a .gguf extension.",
+        app_data_path
+    ))
 }
 
 // ==================== Database Functions ====================
