@@ -904,7 +904,6 @@ async fn chat_stream(
                 }
                 
                 if let Ok(parsed) = serde_json::from_str::<OpenAIStreamResponse>(&msg.data) {
-                    print!("{0}", msg.data);
                     if let Some(choice) = parsed.choices.first() {
                         let content_delta = choice.delta.content.clone().unwrap_or_default();
                         let reasoning_delta = choice.delta.reasoning_content.clone().unwrap_or_default();

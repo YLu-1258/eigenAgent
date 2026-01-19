@@ -820,15 +820,6 @@ html, body, #root {
 }
 
 /* ==================== IMAGE UPLOADS ==================== */
-.pendingImages {
-  display: flex;
-  gap: 8px;
-  padding: 12px 24px 0;
-  flex-wrap: wrap;
-  max-width: 800px;
-  margin: 0 auto;
-}
-
 .pendingImageThumb {
   position: relative;
   width: 64px;
@@ -889,30 +880,6 @@ html, body, #root {
   border-color: rgba(59, 130, 246, 0.5);
 }
 
-.imageUploadBtn {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  background: rgba(26, 26, 26, 0.6);
-  color: #60a5fa;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-  flex-shrink: 0;
-}
-
-.imageUploadBtn:hover:not(:disabled) {
-  border-color: rgba(59, 130, 246, 0.6);
-  background: rgba(59, 130, 246, 0.15);
-}
-
-.imageUploadBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 
 /* ==================== RESPONSIVE ==================== */
 @media (max-width: 1200px) {
@@ -1334,4 +1301,110 @@ html, body, #root {
 
 .noModelWarningText strong {
   color: #e5e5e5;
+}
+
+/* ==================== FILE ATTACHMENTS ==================== */
+.pendingAttachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(26, 26, 26, 0.5);
+  border-radius: 12px 12px 0 0;
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  border-bottom: none;
+}
+
+.pendingFileChip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 8px;
+  font-size: 12px;
+  color: #e5e5e5;
+}
+
+.pendingFileChip svg {
+  color: #60a5fa;
+  flex-shrink: 0;
+}
+
+.pendingFileName {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pendingFileChip button {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: none;
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  margin-left: 2px;
+}
+
+.pendingFileChip button:hover {
+  background: rgba(239, 68, 68, 0.4);
+}
+
+.fileUploadBtn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(59, 130, 246, 0.05);
+  color: #60a5fa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.fileUploadBtn:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.fileUploadBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* File chips in messages */
+.messageFiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.messageFileChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 6px;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.messageFileChip svg {
+  color: #60a5fa;
 }

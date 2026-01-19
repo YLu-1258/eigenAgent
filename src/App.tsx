@@ -20,12 +20,21 @@ type ImageAttachment = {
     previewUrl: string;
 };
 
+type FileAttachment = {
+    id: string;
+    name: string;
+    type: "text" | "code" | "document";
+    content: string;
+    language?: string; // for code files
+};
+
 type ChatMessage = {
-    id:string;
+    id: string;
     role: Role;
     content: string;
     thinking: string;
     images: ImageAttachment[];
+    files: FileAttachment[];
     isStreaming: boolean;
     durationMs?: number;
 };
@@ -139,9 +148,10 @@ function welcomeMessage(): ChatMessage {
     return {
         id: uid(),
         role: "assistant",
-        content: "Hi — ask me anything.\n\nI can render **Markdown** and see images too!",
+        content: "Hi — ask me anything.\n\nI can render **Markdown**, see images, and read files too!",
         thinking: "",
         images: [],
+        files: [],
         isStreaming: false,
     };
 }
@@ -158,6 +168,7 @@ export default function App() {
     const [sidebarOpen, setSidebarOpen] = useState(true);
     const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
     const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
+    const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([]);
 
     // Model catalog state
     const [models, setModels] = useState<ModelInfo[]>([]);
@@ -304,6 +315,7 @@ export default function App() {
                     base64,
                     previewUrl: `data:image/jpeg;base64,${base64}`,
                 })),
+                files: [],
                 isStreaming: false,
                 durationMs: r.duration_ms,
             }));
@@ -311,6 +323,7 @@ export default function App() {
             setSelectedThinkingId(null);
             setIsGenerating(false);
             setPendingImages([]);
+            setPendingFiles([]);
             currentAssistantIdRef.current = null;
             inThinkRef.current = false;
 
@@ -326,6 +339,7 @@ export default function App() {
         setSelectedThinkingId(null);
         setIsGenerating(false);
         setPendingImages([]);
+        setPendingFiles([]);
         currentAssistantIdRef.current = null;
         inThinkRef.current = false;
     }
@@ -624,30 +638,98 @@ export default function App() {
 
 
     const canSend = useMemo(
-        () => (input.trim().length > 0 || pendingImages.length > 0) && !isGenerating && modelReady && !modelSwitching,
-        [input, pendingImages, isGenerating, modelReady, modelSwitching]
+        () => (input.trim().length > 0 || pendingImages.length > 0 || pendingFiles.length > 0) && !isGenerating && modelReady && !modelSwitching,
+        [input, pendingImages, pendingFiles, isGenerating, modelReady, modelSwitching]
     );
 
-    async function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    // File type detection helpers
+    const CODE_EXTENSIONS: Record<string, string> = {
+        js: "javascript", jsx: "javascript", ts: "typescript", tsx: "typescript",
+        py: "python", rb: "ruby", java: "java", c: "c", cpp: "cpp", h: "c",
+        hpp: "cpp", cs: "csharp", go: "go", rs: "rust", swift: "swift",
+        kt: "kotlin", scala: "scala", php: "php", sh: "bash", bash: "bash",
+        zsh: "bash", fish: "fish", ps1: "powershell", sql: "sql", r: "r",
+        lua: "lua", perl: "perl", hs: "haskell", ml: "ocaml", clj: "clojure",
+        ex: "elixir", exs: "elixir", erl: "erlang", dart: "dart", vue: "vue",
+        svelte: "svelte", css: "css", scss: "scss", sass: "sass", less: "less",
+        html: "html", htm: "html", xml: "xml", json: "json", yaml: "yaml",
+        yml: "yaml", toml: "toml", ini: "ini", cfg: "ini", conf: "ini",
+        md: "markdown", mdx: "markdown", dockerfile: "dockerfile", makefile: "makefile",
+    };
+
+    const TEXT_EXTENSIONS = ["txt", "log", "csv", "tsv", "env", "gitignore", "editorconfig"];
+
+    function getFileCategory(filename: string, mimeType: string): { type: "image" | "text" | "code" | "document"; language?: string } {
+        const ext = filename.split(".").pop()?.toLowerCase() || "";
+
+        if (mimeType.startsWith("image/")) {
+            return { type: "image" };
+        }
+
+        if (CODE_EXTENSIONS[ext]) {
+            return { type: "code", language: CODE_EXTENSIONS[ext] };
+        }
+
+        if (TEXT_EXTENSIONS.includes(ext)) {
+            return { type: "text" };
+        }
+
+        if (mimeType === "application/pdf" || ext === "pdf") {
+            return { type: "document" };
+        }
+
+        if (mimeType.startsWith("text/") || mimeType === "application/json" || mimeType === "application/xml") {
+            return { type: "text" };
+        }
+
+        // Default to text for unknown types
+        return { type: "text" };
+    }
+
+    async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
         const files = e.target.files;
         if (!files) return;
 
         for (const file of Array.from(files)) {
-            if (!file.type.startsWith("image/")) continue;
-            if (file.size > 10 * 1024 * 1024) {
-                console.warn("Image too large, skipping:", file.name);
-                continue;
-            }
+            const category = getFileCategory(file.name, file.type);
 
-            const base64 = await fileToBase64(file);
-            setPendingImages((prev) => [
-                ...prev,
-                {
-                    id: uid(),
-                    base64,
-                    previewUrl: `data:${file.type};base64,${base64}`,
-                },
-            ]);
+            if (category.type === "image") {
+                if (file.size > 10 * 1024 * 1024) {
+                    console.warn("Image too large, skipping:", file.name);
+                    continue;
+                }
+                const base64 = await fileToBase64(file);
+                setPendingImages((prev) => [
+                    ...prev,
+                    {
+                        id: uid(),
+                        base64,
+                        previewUrl: `data:${file.type};base64,${base64}`,
+                    },
+                ]);
+            } else {
+                // Text, code, or document files
+                if (file.size > 5 * 1024 * 1024) {
+                    console.warn("File too large, skipping:", file.name);
+                    continue;
+                }
+
+                try {
+                    const content = await fileToText(file);
+                    setPendingFiles((prev) => [
+                        ...prev,
+                        {
+                            id: uid(),
+                            name: file.name,
+                            type: category.type as "text" | "code" | "document",
+                            content,
+                            language: category.language,
+                        },
+                    ]);
+                } catch (err) {
+                    console.error("Failed to read file:", file.name, err);
+                }
+            }
         }
 
         // Reset file input
@@ -669,22 +751,51 @@ export default function App() {
         });
     }
 
+    function fileToText(file: File): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                resolve(reader.result as string);
+            };
+            reader.onerror = reject;
+            reader.readAsText(file);
+        });
+    }
+
     function removePendingImage(id: string) {
         setPendingImages((prev) => prev.filter((img) => img.id !== id));
     }
 
+    function removePendingFile(id: string) {
+        setPendingFiles((prev) => prev.filter((f) => f.id !== id));
+    }
+
     async function handleSend() {
         const text = input.trim();
-        if ((!text && pendingImages.length === 0) || isGenerating || !modelReady) return;
+        if ((!text && pendingImages.length === 0 && pendingFiles.length === 0) || isGenerating || !modelReady) return;
 
         const userImages = [...pendingImages];
+        const userFiles = [...pendingFiles];
+
+        // Build the full prompt with file contents
+        let fullPrompt = text;
+
+        if (userFiles.length > 0) {
+            const fileContents = userFiles.map((f) => {
+                const lang = f.language || f.type;
+                return `\n\n--- File: ${f.name} ---\n\`\`\`${lang}\n${f.content}\n\`\`\``;
+            }).join("");
+
+            fullPrompt = text + fileContents;
+        }
 
         setMessages((prev) => [
             ...prev,
-            { id: uid(), role: "user", content: text, thinking: "", images: userImages, isStreaming: false },
+            { id: uid(), role: "user", content: text, thinking: "", images: userImages, files: userFiles, isStreaming: false },
         ]);
         setInput("");
         setPendingImages([]);
+        setPendingFiles([]);
 
         try {
             setIsGenerating(true);
@@ -700,7 +811,7 @@ export default function App() {
             await invoke("chat_stream", {
                 args: {
                     chatId: chat_id,
-                    prompt: text,
+                    prompt: fullPrompt,
                     images: userImages.map((img) => img.base64),
                 },
             });
@@ -1047,6 +1158,24 @@ export default function App() {
                                         </div>
                                     )}
 
+                                    {/* Display files if present */}
+                                    {m.files && m.files.length > 0 && (
+                                        <div className="messageFiles">
+                                            {m.files.map((file) => (
+                                                <div key={file.id} className="messageFileChip">
+                                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                        {file.type === "code" ? (
+                                                            <><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></>
+                                                        ) : (
+                                                            <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /></>
+                                                        )}
+                                                    </svg>
+                                                    {file.name}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
                                     <div
                                         className={`bubble ${isUser ? "userBubble" : "assistantBubble"} ${ !isUser && m.id === selectedThinkingId ? "selected" : ""}`}
                                         title={!isUser ? "Click to view thinking" : undefined}
@@ -1102,13 +1231,28 @@ export default function App() {
                 </div>
 
                 <div className="inputRow">
-                    {/* Pending images preview */}
-                    {pendingImages.length > 0 && (
-                        <div className="pendingImages">
+                    {/* Pending attachments preview */}
+                    {(pendingImages.length > 0 || pendingFiles.length > 0) && (
+                        <div className="pendingAttachments">
                             {pendingImages.map((img) => (
                                 <div key={img.id} className="pendingImageThumb">
                                     <img src={img.previewUrl} alt="pending" />
                                     <button onClick={() => removePendingImage(img.id)} title="Remove image">
+                                        &times;
+                                    </button>
+                                </div>
+                            ))}
+                            {pendingFiles.map((file) => (
+                                <div key={file.id} className="pendingFileChip">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        {file.type === "code" ? (
+                                            <><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></>
+                                        ) : (
+                                            <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /></>
+                                        )}
+                                    </svg>
+                                    <span className="pendingFileName">{file.name}</span>
+                                    <button onClick={() => removePendingFile(file.id)} title="Remove file">
                                         &times;
                                     </button>
                                 </div>
@@ -1118,23 +1262,21 @@ export default function App() {
 
                     <div className="inputContainer">
                         <button
-                            className="imageUploadBtn"
+                            className="fileUploadBtn"
                             onClick={() => fileInputRef.current?.click()}
                             disabled={isGenerating}
-                            title="Upload image"
+                            title="Upload file (images, code, documents)"
                         >
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                                <circle cx="8.5" cy="8.5" r="1.5" />
-                                <polyline points="21 15 16 10 5 21" />
+                                <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
                             </svg>
                         </button>
                         <input
                             type="file"
                             ref={fileInputRef}
-                            accept="image/*"
+                            accept="image/*,.txt,.md,.json,.xml,.csv,.log,.py,.js,.ts,.tsx,.jsx,.c,.cpp,.h,.hpp,.java,.rb,.go,.rs,.swift,.kt,.php,.sh,.sql,.html,.css,.scss,.yaml,.yml,.toml,.ini,.cfg,.conf,.env"
                             multiple
-                            onChange={handleImageSelect}
+                            onChange={handleFileSelect}
                             style={{ display: "none" }}
                         />
                         <input
