@@ -5,27 +5,21 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
 };
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use reqwest_eventsource::{Event, EventSource};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::ShellExt;
 
 const MAX_TOKENS: u32 = 8192;
 const SERVER_PORT: u16 = 8080;
 
 const SYSTEM_PROMPT: &str = r#"
 You are Eigen, a helpful AI assistant.
-
-When you receive a prompt, you must first share your thought process within <think>...</think> tags. After thinking, provide your final answer.
-
-Example:
-<think>The user is asking for the capital of France. I know that is Paris. I will state this clearly.</think>
-The capital of France is Paris.
 
 Rules:
 - Use Markdown for formatting.
@@ -59,6 +53,8 @@ pub struct ChatMessageRow {
     pub thinking: String,
     pub images: Vec<String>,
     pub created_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -92,11 +88,13 @@ pub struct ChatBeginPayload {
 pub struct ChatDeltaPayload {
     pub chat_id: String,
     pub delta: String,
+    pub reasoning_delta: String,
 }
 
 #[derive(Clone, Serialize)]
 pub struct ChatEndPayload {
     pub chat_id: String,
+    pub duration_ms: i64,
 }
 
 // ==================== Server Manager ====================
@@ -161,6 +159,7 @@ struct OpenAIStreamChoice {
 #[derive(Deserialize, Debug)]
 struct OpenAIDelta {
     content: Option<String>,
+    reasoning_content: Option<String>,
 }
 
 // ==================== Model File Discovery ====================
@@ -269,7 +268,6 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             |row| row.get(0),
         )
         .unwrap_or(false);
-
     if !has_thinking {
         conn.execute(
             "ALTER TABLE messages ADD COLUMN thinking TEXT NOT NULL DEFAULT ''",
@@ -286,13 +284,25 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             |row| row.get(0),
         )
         .unwrap_or(false);
-
     if !has_images {
         conn.execute(
             "ALTER TABLE messages ADD COLUMN images TEXT NOT NULL DEFAULT '[]'",
             [],
         )
         .map_err(|e| e.to_string())?;
+    }
+
+    // Migration: add duration_ms column if missing
+    let has_duration: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('messages') WHERE name = 'duration_ms'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if !has_duration {
+        conn.execute("ALTER TABLE messages ADD COLUMN duration_ms INTEGER", [])
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -305,15 +315,25 @@ fn insert_message(
     content: &str,
     thinking: &str,
     images: &[String],
+    duration_ms: Option<i64>,
 ) -> Result<(), String> {
     let now = unix_ms();
     let msg_id = uuid::Uuid::new_v4().to_string();
     let images_json = serde_json::to_string(images).unwrap_or_else(|_| "[]".to_string());
 
     conn.execute(
-        "INSERT INTO messages (id, conversation_id, role, content, thinking, images, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![msg_id, chat_id, role, content, thinking, images_json, now],
+        "INSERT INTO messages (id, conversation_id, role, content, thinking, images, created_at, duration_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            msg_id,
+            chat_id,
+            role,
+            content,
+            thinking,
+            images_json,
+            now,
+            duration_ms,
+        ],
     )
     .map_err(|e| e.to_string())?;
 
@@ -433,7 +453,7 @@ fn get_chat_messages(
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, role, content, thinking, images, created_at
+            SELECT id, role, content, thinking, images, created_at, duration_ms
             FROM messages
             WHERE conversation_id = ?1
             ORDER BY created_at ASC
@@ -454,6 +474,7 @@ fn get_chat_messages(
                 thinking: row.get(3)?,
                 images,
                 created_at: row.get(5)?,
+                duration_ms: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -508,13 +529,15 @@ async fn chat_stream(
     let prompt = args.prompt;
     let images = args.images;
 
+    let start_time = Instant::now();
+
     // Reset cancellation flag
     state.is_cancelled.store(false, Ordering::SeqCst);
 
     // Save user message immediately
     {
         let conn = open_db(&state.db_path)?;
-        insert_message(&conn, &chat_id, "user", &prompt, "", &images)?;
+        insert_message(&conn, &chat_id, "user", &prompt, "", &images, None)?;
     }
 
     // Load conversation history
@@ -615,10 +638,10 @@ async fn chat_stream(
         .json(&request_body);
 
     let mut es = EventSource::new(request_builder).map_err(|e| e.to_string())?;
-    let mut full_response = String::new();
+    let mut full_response_content = String::new();
+    let mut full_response_thinking = String::new();
 
     while let Some(event) = es.next().await {
-        // Check for cancellation
         if state.is_cancelled.load(Ordering::SeqCst) {
             es.close();
             break;
@@ -630,21 +653,29 @@ async fn chat_stream(
                 if msg.data == "[DONE]" {
                     break;
                 }
-
+                
                 if let Ok(parsed) = serde_json::from_str::<OpenAIStreamResponse>(&msg.data) {
+                    print!("{0}", msg.data);
                     if let Some(choice) = parsed.choices.first() {
-                        if let Some(content) = &choice.delta.content {
-                            full_response.push_str(content);
+                        let content_delta = choice.delta.content.clone().unwrap_or_default();
+                        let reasoning_delta = choice.delta.reasoning_content.clone().unwrap_or_default();
 
-                            app.emit(
-                                "chat:delta",
-                                ChatDeltaPayload {
-                                    chat_id: chat_id.clone(),
-                                    delta: content.clone(),
-                                },
-                            )
-                            .map_err(|e| e.to_string())?;
+                        if !content_delta.is_empty() {
+                            full_response_content.push_str(&content_delta);
                         }
+                        if !reasoning_delta.is_empty() {
+                            full_response_thinking.push_str(&reasoning_delta);
+                        }
+                        
+                        app.emit(
+                            "chat:delta",
+                            ChatDeltaPayload {
+                                chat_id: chat_id.clone(),
+                                delta: content_delta,
+                                reasoning_delta,
+                            },
+                        )
+                        .map_err(|e| e.to_string())?;
                     }
                 }
             }
@@ -655,24 +686,20 @@ async fn chat_stream(
         }
     }
 
-    // Extract thinking from response
-    let open = "<think>";
-    let close = "</think>";
-    let (final_answer, thinking) = match (full_response.find(open), full_response.rfind(close)) {
-        (Some(start_idx), Some(end_idx)) if start_idx < end_idx => {
-            let thinking_content = &full_response[start_idx + open.len()..end_idx];
-            let mut result = String::with_capacity(full_response.len());
-            result.push_str(&full_response[..start_idx]);
-            result.push_str(&full_response[end_idx + close.len()..]);
-            (result, thinking_content.to_string())
-        }
-        _ => (full_response.clone(), String::new()),
-    };
+    let duration_ms = start_time.elapsed().as_millis() as i64;
 
     // Save assistant response
     {
         let conn = open_db(&state.db_path)?;
-        insert_message(&conn, &chat_id, "assistant", &final_answer, &thinking, &[])?;
+        insert_message(
+            &conn,
+            &chat_id,
+            "assistant",
+            &full_response_content,
+            &full_response_thinking,
+            &[],
+            Some(duration_ms),
+        )?;
     }
 
     // Emit stream end
@@ -680,6 +707,7 @@ async fn chat_stream(
         "chat:end",
         ChatEndPayload {
             chat_id: chat_id.clone(),
+            duration_ms,
         },
     )
     .map_err(|e| e.to_string())?;
@@ -738,7 +766,9 @@ pub fn run() {
 
                 // Build sidecar command
                 let shell = app_handle.shell();
-                let mut cmd = shell.sidecar("llama-server").expect("Failed to create sidecar command");
+                let mut cmd = shell
+                    .sidecar("llama-server")
+                    .expect("Failed to create sidecar command");
 
                 cmd = cmd
                     .args(["-m", model_path_clone.to_str().unwrap()])
@@ -765,10 +795,16 @@ pub fn run() {
                             while let Some(event) = rx.recv().await {
                                 match event {
                                     tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-                                        println!("[llama-server] {}", String::from_utf8_lossy(&line));
+                                        println!(
+                                            "[llama-server] {}",
+                                            String::from_utf8_lossy(&line)
+                                        );
                                     }
                                     tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-                                        eprintln!("[llama-server] {}", String::from_utf8_lossy(&line));
+                                        eprintln!(
+                                            "[llama-server] {}",
+                                            String::from_utf8_lossy(&line)
+                                        );
                                     }
                                     _ => {}
                                 }
@@ -788,7 +824,10 @@ pub fn run() {
                         }
                     }
                     Err(e) => {
-                        let _ = app_handle.emit("model:error", format!("Failed to spawn llama-server: {}", e));
+                        let _ = app_handle.emit(
+                            "model:error",
+                            format!("Failed to spawn llama-server: {}", e),
+                        );
                     }
                 }
             });

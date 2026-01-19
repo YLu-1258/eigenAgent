@@ -891,3 +891,20 @@ html, body, #root {
     max-width: 75%;
   }
 }
+
+/* ==================== MESSAGE META ==================== */
+.msgMeta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.duration {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 500;
+}

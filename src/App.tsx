@@ -21,12 +21,13 @@ type ImageAttachment = {
 };
 
 type ChatMessage = {
-    id: string;
+    id:string;
     role: Role;
     content: string;
     thinking: string;
     images: ImageAttachment[];
     isStreaming: boolean;
+    durationMs?: number;
 };
 
 type ChatHistoryItem = {
@@ -43,6 +44,7 @@ type ChatMessageRow = {
     thinking: string;
     images: string[];
     created_at: number;
+    duration_ms?: number;
 };
 
 type ChatBeginPayload = {
@@ -52,10 +54,12 @@ type ChatBeginPayload = {
 type ChatDeltaPayload = {
     chat_id: string;
     delta: string;
+    reasoning_delta: string;
 };
 
 type ChatEndPayload = {
     chat_id: string;
+    duration_ms: number;
 };
 
 function uid() {
@@ -130,6 +134,7 @@ export default function App() {
                     previewUrl: `data:image/jpeg;base64,${base64}`,
                 })),
                 isStreaming: false,
+                durationMs: r.duration_ms,
             }));
 
             setSelectedThinkingId(null);
@@ -256,7 +261,8 @@ export default function App() {
                 if (!event.payload) return;
                 if (event.payload.chat_id !== activeChatIdRef.current) return;
 
-                const delta = event.payload.delta ?? "";
+                const content_delta = event.payload.delta ?? "";
+                const reasoning_delta = event.payload.reasoning_delta ?? "";
                 const assistantId = currentAssistantIdRef.current;
                 if (!assistantId) return;
 
@@ -264,36 +270,11 @@ export default function App() {
                     prev.map((m) => {
                         if (m.id !== assistantId) return m;
 
-                        let thinking = m.thinking;
-                        let content = m.content;
-
-                        let i = 0;
-                        while (i < delta.length) {
-                            if (!inThinkRef.current) {
-                                const start = delta.indexOf("<think>", i);
-                                if (start === -1) {
-                                    content += delta.slice(i);
-                                    break;
-                                }
-                                content += delta.slice(i, start);
-                                inThinkRef.current = true;
-                                i = start + "<think>".length;
-                            } else {
-                                const end = delta.indexOf("</think>", i);
-                                if (end === -1) {
-                                    thinking += delta.slice(i);
-                                    break;
-                                }
-                                thinking += delta.slice(i, end);
-                                inThinkRef.current = false;
-                                i = end + "</think>".length;
-                            }
-                        }
-
-                        content = content.replaceAll("</think>", "").replaceAll("<think>", "");
-                        thinking = thinking.replaceAll("</think>", "").replaceAll("<think>", "");
-
-                        return { ...m, thinking, content };
+                        return {
+                            ...m,
+                            content: m.content + content_delta,
+                            thinking: m.thinking + reasoning_delta,
+                        };
                     })
                 );
             });
@@ -311,7 +292,11 @@ export default function App() {
 
                 if (assistantId) {
                     setMessages((prev) =>
-                        prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m))
+                        prev.map((m) =>
+                            m.id === assistantId
+                                ? { ...m, isStreaming: false, durationMs: event.payload.duration_ms }
+                                : m
+                        )
                     );
                 }
 
@@ -569,9 +554,7 @@ export default function App() {
                                     )}
 
                                     <div
-                                        className={`bubble ${isUser ? "userBubble" : "assistantBubble"} ${
-                                            !isUser && m.id === selectedThinkingId ? "selected" : ""
-                                        }`}
+                                        className={`bubble ${isUser ? "userBubble" : "assistantBubble"} ${ !isUser && m.id === selectedThinkingId ? "selected" : ""}`}
                                         title={!isUser ? "Click to view thinking" : undefined}
                                         onClick={() => {
                                             if (!isUser) setSelectedThinkingId(m.id);
@@ -594,14 +577,26 @@ export default function App() {
                                         )}
                                     </div>
 
-                                    {!isUser && (
-                                        <button className="thinkBtn" onClick={() => setSelectedThinkingId(m.id)}>
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                                <circle cx="12" cy="12" r="3" />
-                                                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-                                            </svg>
-                                            View thinking
-                                        </button>
+                                    {!isUser && !m.isStreaming && (
+                                        <div className="msgMeta">
+                                            <button className="thinkBtn" onClick={() => setSelectedThinkingId(m.id)}>
+                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                    <circle cx="12" cy="12" r="3" />
+                                                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                                                </svg>
+                                                View thinking
+                                            </button>
+
+                                            {m.durationMs && (
+                                                <div className="duration">
+                                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                        <circle cx="12" cy="12" r="10" />
+                                                        <polyline points="12 6 12 12 16 14" />
+                                                    </svg>
+                                                    {(m.durationMs / 1000).toFixed(1)}s
+                                                </div>
+                                            )}
+                                        </div>
                                     )}
                                 </div>
 
