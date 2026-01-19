@@ -315,6 +315,42 @@ export default function App() {
         };
     }, [chatId]);
 
+    // Global paste handler
+    useEffect(() => {
+        const handlePaste = (event: ClipboardEvent) => {
+            const items = event.clipboardData?.items;
+            if (!items) return;
+
+            for (const item of items) {
+                if (item.type.startsWith("image")) {
+                    const file = item.getAsFile();
+                    if (!file) continue;
+
+                    event.preventDefault();
+
+                    fileToBase64(file).then((base64) => {
+                        setPendingImages((prev) => [
+                            ...prev,
+                            {
+                                id: uid(),
+                                base64,
+                                previewUrl: `data:${file.type};base64,${base64}`,
+                            },
+                        ]);
+                    });
+                }
+            }
+        };
+
+        window.addEventListener("paste", handlePaste);
+
+        return () => {
+            window.removeEventListener("paste", handlePaste);
+        };
+    }, []);
+
+
+
     const canSend = useMemo(
         () => (input.trim().length > 0 || pendingImages.length > 0) && !isGenerating && modelReady,
         [input, pendingImages, isGenerating, modelReady]
