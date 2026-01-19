@@ -538,6 +538,38 @@ async fn chat_stream(
     {
         let conn = open_db(&state.db_path)?;
         insert_message(&conn, &chat_id, "user", &prompt, "", &images, None)?;
+
+        // Auto-generate title if it's a new chat
+        let mut needs_title_update = false;
+        let current_title: Result<String, _> = conn.query_row(
+            "SELECT title FROM conversations WHERE id = ?1",
+            params![&chat_id],
+            |row| row.get(0),
+        );
+
+        if let Ok(title) = current_title {
+            if title == "New chat" {
+                needs_title_update = true;
+            }
+        }
+
+        if needs_title_update {
+            let new_title = prompt
+                .split_whitespace()
+                .take(5)
+                .collect::<Vec<&str>>()
+                .join(" ");
+
+            if !new_title.is_empty() {
+                conn.execute(
+                    "UPDATE conversations SET title = ?1 WHERE id = ?2",
+                    params![new_title, &chat_id],
+                )
+                .map_err(|e| e.to_string())?;
+
+                let _ = app.emit("chats:changed", ());
+            }
+        }
     }
 
     // Load conversation history
