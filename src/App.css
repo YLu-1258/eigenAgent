@@ -1408,3 +1408,22 @@ html, body, #root {
 .messageFileChip svg {
   color: #60a5fa;
 }
+
+/* Document file styling */
+.pendingFileChip.document {
+  background: rgba(234, 88, 12, 0.1);
+  border-color: rgba(234, 88, 12, 0.3);
+}
+
+.pendingFileChip.document svg {
+  color: #f97316;
+}
+
+.messageFileChip.document {
+  background: rgba(234, 88, 12, 0.1);
+  border-color: rgba(234, 88, 12, 0.2);
+}
+
+.messageFileChip.document svg {
+  color: #f97316;
+}

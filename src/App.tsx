@@ -10,6 +10,15 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 
+// Document parsing libraries
+import * as pdfjsLib from "pdfjs-dist";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import mammoth from "mammoth";
+import * as XLSX from "xlsx";
+
+// Set up PDF.js worker using local bundle (works in Tauri without network)
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
 const DRAFT_CHAT_ID = "__draft__"
 
 type Role = "user" | "assistant";
@@ -23,7 +32,7 @@ type ImageAttachment = {
 type FileAttachment = {
     id: string;
     name: string;
-    type: "text" | "code";
+    type: "text" | "code" | "document";
     content: string;
     language?: string; // for code files
 };
@@ -536,7 +545,7 @@ export default function App() {
 
                 setMessages((prev) => [
                     ...prev,
-                    { id: assistantId, role: "assistant", content: "", thinking: "", images: [], isStreaming: true },
+                    { id: assistantId, role: "assistant", content: "", thinking: "", images: [], files: [], isStreaming: true },
                 ]);
 
                 setSelectedThinkingId(assistantId);
@@ -659,7 +668,7 @@ export default function App() {
 
     const TEXT_EXTENSIONS = ["txt", "log", "csv", "tsv", "env", "gitignore", "editorconfig"];
 
-    function getFileCategory(filename: string, mimeType: string): { type: "image" | "text" | "code" | "unsupported"; language?: string } {
+    function getFileCategory(filename: string, mimeType: string): { type: "image" | "text" | "code" | "document" | "unsupported"; language?: string; docType?: string } {
         const ext = filename.split(".").pop()?.toLowerCase() || "";
 
         if (mimeType.startsWith("image/")) {
@@ -674,9 +683,23 @@ export default function App() {
             return { type: "text" };
         }
 
-        // PDFs and other binary documents are not supported yet
-        if (mimeType === "application/pdf" || ext === "pdf" || ext === "docx" || ext === "doc" || ext === "xlsx" || ext === "xls") {
-            return { type: "unsupported" };
+        // Supported document types
+        if (mimeType === "application/pdf" || ext === "pdf") {
+            return { type: "document", docType: "pdf" };
+        }
+
+        if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || ext === "docx") {
+            return { type: "document", docType: "docx" };
+        }
+
+        if (mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" || ext === "xlsx" ||
+            mimeType === "application/vnd.ms-excel" || ext === "xls") {
+            return { type: "document", docType: "excel" };
+        }
+
+        // Unsupported binary formats
+        if (ext === "doc") {
+            return { type: "unsupported" }; // Old .doc format not supported
         }
 
         if (mimeType.startsWith("text/") || mimeType === "application/json" || mimeType === "application/xml") {
@@ -685,6 +708,44 @@ export default function App() {
 
         // Default to text for unknown types (may fail for binary files)
         return { type: "text" };
+    }
+
+    // Document parsing functions
+    async function parsePdf(file: File): Promise<string> {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const textParts: string[] = [];
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items
+                .map((item: any) => item.str)
+                .join(" ");
+            textParts.push(`[Page ${i}]\n${pageText}`);
+        }
+
+        return textParts.join("\n\n");
+    }
+
+    async function parseDocx(file: File): Promise<string> {
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        return result.value;
+    }
+
+    async function parseExcel(file: File): Promise<string> {
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: "array" });
+        const textParts: string[] = [];
+
+        for (const sheetName of workbook.SheetNames) {
+            const sheet = workbook.Sheets[sheetName];
+            const csv = XLSX.utils.sheet_to_csv(sheet);
+            textParts.push(`[Sheet: ${sheetName}]\n${csv}`);
+        }
+
+        return textParts.join("\n\n");
     }
 
     async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -715,6 +776,40 @@ export default function App() {
                         previewUrl: `data:${file.type};base64,${base64}`,
                     },
                 ]);
+            } else if (category.type === "document") {
+                // Parse document files (PDF, DOCX, Excel)
+                if (file.size > 50 * 1024 * 1024) {
+                    console.warn("Document too large, skipping:", file.name);
+                    continue;
+                }
+
+                try {
+                    let content: string;
+
+                    if (category.docType === "pdf") {
+                        content = await parsePdf(file);
+                    } else if (category.docType === "docx") {
+                        content = await parseDocx(file);
+                    } else if (category.docType === "excel") {
+                        content = await parseExcel(file);
+                    } else {
+                        console.warn("Unknown document type:", file.name);
+                        continue;
+                    }
+
+                    setPendingFiles((prev) => [
+                        ...prev,
+                        {
+                            id: uid(),
+                            name: file.name,
+                            type: "document",
+                            content,
+                        },
+                    ]);
+                } catch (err) {
+                    console.error("Failed to parse document:", file.name, err);
+                    alert(`Failed to parse ${file.name}. The file may be corrupted or password-protected.`);
+                }
             } else {
                 // Text or code files
                 if (file.size > 5 * 1024 * 1024) {
@@ -742,7 +837,7 @@ export default function App() {
 
         // Show warning for unsupported files
         if (unsupportedFiles.length > 0) {
-            alert(`The following files are not supported yet:\n${unsupportedFiles.join("\n")}\n\nSupported: images, text files, and code files.`);
+            alert(`The following files are not supported:\n${unsupportedFiles.join("\n")}\n\nSupported: images, PDFs, Word docs (.docx), Excel files, text files, and code files.\n\nNote: Old .doc format is not supported, please convert to .docx.`);
         }
 
         // Reset file input
@@ -841,6 +936,7 @@ export default function App() {
                     content: `Error: ${String(err)}`,
                     thinking: "",
                     images: [],
+                    files: [],
                     isStreaming: false,
                 },
             ]);
@@ -1175,10 +1271,12 @@ export default function App() {
                                     {m.files && m.files.length > 0 && (
                                         <div className="messageFiles">
                                             {m.files.map((file) => (
-                                                <div key={file.id} className="messageFileChip">
+                                                <div key={file.id} className={`messageFileChip ${file.type === "document" ? "document" : ""}`}>
                                                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                                         {file.type === "code" ? (
                                                             <><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></>
+                                                        ) : file.type === "document" ? (
+                                                            <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></>
                                                         ) : (
                                                             <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /></>
                                                         )}
@@ -1256,10 +1354,12 @@ export default function App() {
                                 </div>
                             ))}
                             {pendingFiles.map((file) => (
-                                <div key={file.id} className="pendingFileChip">
+                                <div key={file.id} className={`pendingFileChip ${file.type === "document" ? "document" : ""}`}>
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                         {file.type === "code" ? (
                                             <><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></>
+                                        ) : file.type === "document" ? (
+                                            <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" /></>
                                         ) : (
                                             <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /></>
                                         )}
@@ -1287,7 +1387,7 @@ export default function App() {
                         <input
                             type="file"
                             ref={fileInputRef}
-                            accept="image/*,.txt,.md,.json,.xml,.csv,.tsv,.log,.env,.py,.js,.ts,.tsx,.jsx,.c,.cpp,.h,.hpp,.java,.rb,.go,.rs,.swift,.kt,.scala,.php,.sh,.bash,.zsh,.sql,.r,.lua,.pl,.hs,.ml,.clj,.ex,.exs,.erl,.dart,.vue,.svelte,.html,.htm,.css,.scss,.sass,.less,.yaml,.yml,.toml,.ini,.cfg,.conf,.gitignore,.editorconfig,Dockerfile,Makefile"
+                            accept="image/*,.pdf,.docx,.xlsx,.xls,.txt,.md,.json,.xml,.csv,.tsv,.log,.env,.py,.js,.ts,.tsx,.jsx,.c,.cpp,.h,.hpp,.java,.rb,.go,.rs,.swift,.kt,.scala,.php,.sh,.bash,.zsh,.sql,.r,.lua,.pl,.hs,.ml,.clj,.ex,.exs,.erl,.dart,.vue,.svelte,.html,.htm,.css,.scss,.sass,.less,.yaml,.yml,.toml,.ini,.cfg,.conf,.gitignore,.editorconfig,Dockerfile,Makefile"
                             multiple
                             onChange={handleFileSelect}
                             style={{ display: "none" }}
