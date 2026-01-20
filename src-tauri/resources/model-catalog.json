@@ -18,7 +18,7 @@
         },
         "mmproj": {
           "filename": "mmproj-Qwen3VL-4B-Thinking-F16.gguf",
-          "url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Thinking-GGUF/blob/main/mmproj-Qwen3VL-4B-Thinking-Q8_0.gguf",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Thinking-GGUF/resolve/main/mmproj-Qwen3VL-4B-Thinking-Q8_0.gguf",
           "size_bytes": 836180128
         }
       }

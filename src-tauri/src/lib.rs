@@ -18,6 +18,8 @@ use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 use tokio::io::AsyncWriteExt;
 
+// Note: summarizer.rs is no longer used - titles are generated via LLM
+
 const MAX_TOKENS: u32 = 8192;
 const SERVER_PORT: u16 = 8080;
 
@@ -78,6 +80,12 @@ struct RenameChatArgs {
 
 #[derive(Deserialize)]
 struct DeleteChatArgs {
+    #[serde(alias = "chat_id", alias = "chatId")]
+    chat_id: String,
+}
+
+#[derive(Deserialize)]
+struct GenerateTitleArgs {
     #[serde(alias = "chat_id", alias = "chatId")]
     chat_id: String,
 }
@@ -256,6 +264,23 @@ struct OpenAIStreamChoice {
 
 #[derive(Deserialize, Debug)]
 struct OpenAIDelta {
+    content: Option<String>,
+    reasoning_content: Option<String>,
+}
+
+// Non-streaming response structures
+#[derive(Deserialize, Debug)]
+struct OpenAINonStreamResponse {
+    choices: Vec<OpenAINonStreamChoice>,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAINonStreamChoice {
+    message: OpenAINonStreamMessage,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAINonStreamMessage {
     content: Option<String>,
     reasoning_content: Option<String>,
 }
@@ -741,6 +766,143 @@ fn rename_chat(args: RenameChatArgs, state: State<'_, LlamaServerManager>) -> Re
         params![args.title, unix_ms(), args.chat_id],
     )
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn generate_chat_title(
+    args: GenerateTitleArgs,
+    app: AppHandle,
+    state: State<'_, LlamaServerManager>,
+) -> Result<(), String> {
+    let chat_id = args.chat_id;
+
+    // Check if server is ready
+    if !state.is_ready.load(Ordering::SeqCst) {
+        eprintln!("[generate_chat_title] Server not ready, skipping");
+        return Ok(());
+    }
+
+    // Get the first user message from this chat
+    let first_message = {
+        let conn = open_db(&state.db_path)?;
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT content FROM messages
+                WHERE conversation_id = ?1 AND role = 'user'
+                ORDER BY created_at ASC
+                LIMIT 1
+                "#,
+            )
+            .map_err(|e| e.to_string())?;
+
+        let content: Option<String> = stmt
+            .query_row(params![chat_id.clone()], |row| row.get(0))
+            .ok();
+
+        content
+    };
+
+    let first_message = match first_message {
+        Some(msg) => msg,
+        None => return Ok(()), // No user message yet, nothing to do
+    };
+
+    // Truncate message if too long (for efficiency)
+    let truncated_msg = if first_message.len() > 300 {
+        format!("{}...", &first_message[..300])
+    } else {
+        first_message
+    };
+
+    // Use LLM to generate a concise title
+    let client = reqwest::Client::new();
+
+    let request_body = OpenAIRequest {
+        model: "default".to_string(),
+        messages: vec![
+            OpenAIMessage {
+                role: "system".to_string(),
+                content: OpenAIContent::Text(
+                    "Generate a short chat title (3-6 words max). Return ONLY the title, no quotes, no explanation.".to_string()
+                ),
+            },
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: OpenAIContent::Text(truncated_msg),
+            },
+        ],
+        stream: false,
+        max_tokens: 30,
+    };
+
+    let response = match client
+        .post(format!("{}/v1/chat/completions", state.server_url))
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            eprintln!("[generate_chat_title] Request failed: {}", e);
+            return Ok(());
+        }
+    };
+
+    if !response.status().is_success() {
+        eprintln!("[generate_chat_title] HTTP error: {}", response.status());
+        return Ok(());
+    }
+
+    let response_body: OpenAINonStreamResponse = match response.json().await {
+        Ok(body) => body,
+        Err(e) => {
+            eprintln!("[generate_chat_title] Failed to parse response: {}", e);
+            return Ok(());
+        }
+    };
+
+    let generated_title = response_body
+        .choices
+        .first()
+        .and_then(|c| c.message.content.clone())
+        .unwrap_or_else(|| "New chat".to_string());
+
+    // Clean up the title: remove quotes, trim, limit length
+    let final_title = generated_title
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .lines()
+        .next()
+        .unwrap_or("New chat")
+        .chars()
+        .take(80)
+        .collect::<String>();
+
+    let final_title = if final_title.is_empty() {
+        "New chat".to_string()
+    } else {
+        final_title
+    };
+
+    eprintln!("[generate_chat_title] Generated title: {:?}", final_title);
+
+    // Update the chat title in the database
+    {
+        let conn = open_db(&state.db_path)?;
+        conn.execute(
+            "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            params![final_title, unix_ms(), chat_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    // Notify frontend that chats have changed
+    let _ = app.emit("chats:changed", ());
+
     Ok(())
 }
 
@@ -1674,6 +1836,7 @@ pub fn run() {
             list_chats,
             get_chat_messages,
             rename_chat,
+            generate_chat_title,
             delete_chat,
             cancel_generation,
             chat_stream,

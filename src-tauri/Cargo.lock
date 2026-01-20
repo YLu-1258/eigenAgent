@@ -2669,6 +2669,7 @@ dependencies = [
  "lancedb",
  "llama-cpp-2",
  "notify",
+ "regex",
  "reqwest",
  "reqwest-eventsource",
  "rusqlite",

@@ -189,6 +189,7 @@ export default function App() {
     const currentAssistantIdRef = useRef<string | null>(null);
     const inThinkRef = useRef(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const needsTitleGenerationRef = useRef(false);
 
     const [selectedThinkingId, setSelectedThinkingId] = useState<string | null>(null);
     const selectedThinkingMsg = useMemo(
@@ -209,6 +210,7 @@ export default function App() {
     async function refreshChats() {
         try {
             const chats = await invoke<ChatHistoryItem[]>("list_chats");
+            console.log("[list_chats] received:", chats.map(c => ({ id: c.id.slice(0, 8), title: c.title })));
             setChatHistory(chats);
         } catch (e) {
             console.log("[list_chats] error", e);
@@ -351,6 +353,7 @@ export default function App() {
         setPendingFiles([]);
         currentAssistantIdRef.current = null;
         inThinkRef.current = false;
+        needsTitleGenerationRef.current = false;
     }
 
     // Model loading events
@@ -593,6 +596,16 @@ export default function App() {
                                 : m
                         )
                     );
+                }
+
+                // Generate title for new chats (fire-and-forget, won't block)
+                if (needsTitleGenerationRef.current) {
+                    needsTitleGenerationRef.current = false;
+                    const chatIdForTitle = event.payload.chat_id;
+                    console.log("[generate_chat_title] requesting title for:", chatIdForTitle);
+                    invoke("generate_chat_title", { args: { chatId: chatIdForTitle } })
+                        .then(() => console.log("[generate_chat_title] completed for:", chatIdForTitle))
+                        .catch((err) => console.error("[generate_chat_title] error:", err));
                 }
 
                 refreshChats();
@@ -913,6 +926,7 @@ export default function App() {
             if (chat_id === DRAFT_CHAT_ID) {
                 chat_id = await invoke<string>("new_chat");
                 setChatId(chat_id);
+                needsTitleGenerationRef.current = true;
                 await refreshChats();
             }
 
