@@ -24,6 +24,79 @@
       }
     },
     {
+      "id": "deepseek-r1-1.5b",
+      "name": "DeepSeek R1 Distill 1.5B",
+      "description": "Compact reasoning model distilled from DeepSeek R1, excellent for math and logic",
+      "size_label": "1.5B",
+      "capabilities": {
+        "vision": false,
+        "thinking": true
+      },
+      "files": {
+        "model": {
+          "filename": "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
+          "url": "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
+          "size_bytes": 1120000000
+        }
+      }
+    },
+    {
+      "id": "deepseek-r1-7b",
+      "name": "DeepSeek R1 Distill 7B",
+      "description": "Powerful reasoning model with chain-of-thought capabilities, outperforms GPT-4o on math",
+      "size_label": "7B",
+      "capabilities": {
+        "vision": false,
+        "thinking": true
+      },
+      "files": {
+        "model": {
+          "filename": "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
+          "url": "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
+          "size_bytes": 4680000000
+        }
+      }
+    },
+    {
+      "id": "gemma3-4b-vision",
+      "name": "Gemma 3 4B Vision",
+      "description": "Google's multimodal model with 128K context, handles images and 140+ languages",
+      "size_label": "4B",
+      "capabilities": {
+        "vision": true,
+        "thinking": false
+      },
+      "files": {
+        "model": {
+          "filename": "google_gemma-3-4b-it-Q4_K_M.gguf",
+          "url": "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
+          "size_bytes": 2490000000
+        },
+        "mmproj": {
+          "filename": "mmproj-google_gemma-3-4b-it-f16.gguf",
+          "url": "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/mmproj-google_gemma-3-4b-it-f16.gguf",
+          "size_bytes": 851000000
+        }
+      }
+    },
+    {
+      "id": "llama3.2-3b",
+      "name": "Llama 3.2 3B Instruct",
+      "description": "Meta's latest compact model, strong multilingual and reasoning capabilities",
+      "size_label": "3B",
+      "capabilities": {
+        "vision": false,
+        "thinking": false
+      },
+      "files": {
+        "model": {
+          "filename": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+          "url": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+          "size_bytes": 2020000000
+        }
+      }
+    },
+    {
       "id": "llama3-8b",
       "name": "Llama 3 8B Instruct",
       "description": "Fast and capable text-only model for general tasks",
@@ -37,6 +110,91 @@
           "filename": "Meta-Llama-3-8B-Instruct-Q4_K_M.gguf",
           "url": "https://huggingface.co/bartowski/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf",
           "size_bytes": 4920916480
+        }
+      }
+    },
+    {
+      "id": "qwen2.5-3b",
+      "name": "Qwen 2.5 3B Instruct",
+      "description": "Excellent small model for coding, drafting, and multilingual tasks",
+      "size_label": "3B",
+      "capabilities": {
+        "vision": false,
+        "thinking": false
+      },
+      "files": {
+        "model": {
+          "filename": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+          "url": "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+          "size_bytes": 1930000000
+        }
+      }
+    },
+    {
+      "id": "qwen2.5-7b",
+      "name": "Qwen 2.5 7B Instruct",
+      "description": "Strong 7B model for drafting, analysis, and agent-style tool use",
+      "size_label": "7B",
+      "capabilities": {
+        "vision": false,
+        "thinking": false
+      },
+      "files": {
+        "model": {
+          "filename": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+          "url": "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+          "size_bytes": 4680000000
+        }
+      }
+    },
+    {
+      "id": "smollm2-1.7b",
+      "name": "SmolLM2 1.7B Instruct",
+      "description": "Tiny but capable model, runs fast on CPU with only 2GB RAM",
+      "size_label": "1.7B",
+      "capabilities": {
+        "vision": false,
+        "thinking": false
+      },
+      "files": {
+        "model": {
+          "filename": "SmolLM2-1.7B-Instruct-Q4_K_M.gguf",
+          "url": "https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q4_K_M.gguf",
+          "size_bytes": 1060000000
+        }
+      }
+    },
+    {
+      "id": "gemma2-2b",
+      "name": "Gemma 2 2B Instruct",
+      "description": "Google's efficient small model, great quality for its size",
+      "size_label": "2B",
+      "capabilities": {
+        "vision": false,
+        "thinking": false
+      },
+      "files": {
+        "model": {
+          "filename": "gemma-2-2b-it-Q4_K_M.gguf",
+          "url": "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
+          "size_bytes": 1710000000
+        }
+      }
+    },
+    {
+      "id": "mistral-7b",
+      "name": "Mistral 7B Instruct v0.3",
+      "description": "Classic efficient 7B model with strong general capabilities",
+      "size_label": "7B",
+      "capabilities": {
+        "vision": false,
+        "thinking": false
+      },
+      "files": {
+        "model": {
+          "filename": "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+          "url": "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+          "size_bytes": 4370000000
         }
       }
     },
