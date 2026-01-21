@@ -37,3 +37,4 @@ futures = "0.3"
 base64 = "0.22"
 notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
 regex = "1"
+dirs = "5"

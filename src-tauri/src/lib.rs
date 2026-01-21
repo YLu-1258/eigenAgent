@@ -18,19 +18,13 @@ use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 use tokio::io::AsyncWriteExt;
 
+mod settings;
+use settings::{AppSettings, load_settings, save_settings, get_default_settings};
+
 // Note: summarizer.rs is no longer used - titles are generated via LLM
 
 const MAX_TOKENS: u32 = 8192;
 const SERVER_PORT: u16 = 8080;
-
-const SYSTEM_PROMPT: &str = r#"
-You are Eigen, a helpful AI assistant.
-
-Rules:
-- Use Markdown for formatting.
-- Use LaTeX ($...$ / $$...$$) for math.
-- If you don't know, say "I don't know".
-"#;
 
 // ==================== Data Structures ====================
 
@@ -213,6 +207,7 @@ struct LlamaServerManager {
     current_model_id: Mutex<Option<String>>,
     active_downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
     downloading_progress: Mutex<HashMap<String, f32>>,
+    app_settings: Mutex<AppSettings>,
 }
 
 // ==================== OpenAI API Types ====================
@@ -987,10 +982,16 @@ async fn chat_stream(
         msgs
     };
 
+    // Get system prompt from settings
+    let system_prompt = {
+        let settings = state.app_settings.lock().map_err(|e| e.to_string())?;
+        settings.defaults.system_prompt.clone()
+    };
+
     // Build OpenAI-format messages
     let mut openai_messages: Vec<OpenAIMessage> = vec![OpenAIMessage {
         role: "system".to_string(),
-        content: OpenAIContent::Text(SYSTEM_PROMPT.to_string()),
+        content: OpenAIContent::Text(system_prompt),
     }];
 
     // Add recent history (last 20 turns)
@@ -1593,6 +1594,45 @@ fn delete_model(
     Ok(())
 }
 
+// ==================== Settings Commands ====================
+
+#[tauri::command]
+fn cmd_load_settings(state: State<'_, LlamaServerManager>) -> Result<AppSettings, String> {
+    let settings = state.app_settings.lock().map_err(|e| e.to_string())?;
+    Ok(settings.clone())
+}
+
+#[tauri::command]
+fn cmd_save_settings(
+    new_settings: AppSettings,
+    state: State<'_, LlamaServerManager>,
+) -> Result<(), String> {
+    // Save to disk
+    save_settings(&new_settings)?;
+
+    // Update in-memory state
+    let mut settings = state.app_settings.lock().map_err(|e| e.to_string())?;
+    *settings = new_settings;
+
+    println!("[settings] Settings updated");
+    Ok(())
+}
+
+#[tauri::command]
+fn cmd_reset_settings(state: State<'_, LlamaServerManager>) -> Result<AppSettings, String> {
+    let default_settings = get_default_settings();
+
+    // Save defaults to disk
+    save_settings(&default_settings)?;
+
+    // Update in-memory state
+    let mut settings = state.app_settings.lock().map_err(|e| e.to_string())?;
+    *settings = default_settings.clone();
+
+    println!("[settings] Settings reset to defaults");
+    Ok(default_settings)
+}
+
 // ==================== App Entry Point ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1649,6 +1689,13 @@ pub fn run() {
 
             let server_url = format!("http://127.0.0.1:{}", SERVER_PORT);
 
+            // Load settings
+            let app_settings = load_settings().unwrap_or_else(|e| {
+                eprintln!("[settings] Failed to load settings, using defaults: {}", e);
+                get_default_settings()
+            });
+            println!("[settings] Loaded settings (theme: {})", app_settings.appearance.theme);
+
             // Store state - use empty path if no model found
             let (model_path, mmproj_path, current_model_id) = match found_model {
                 Some((mp, mmpp, id)) => {
@@ -1679,6 +1726,7 @@ pub fn run() {
                 current_model_id: Mutex::new(current_model_id),
                 active_downloads: Mutex::new(HashMap::new()),
                 downloading_progress: Mutex::new(HashMap::new()),
+                app_settings: Mutex::new(app_settings),
             });
 
             print!("[app] Do we have model: {}\n", has_model);
@@ -1845,7 +1893,10 @@ pub fn run() {
             switch_model,
             download_model,
             cancel_download,
-            delete_model
+            delete_model,
+            cmd_load_settings,
+            cmd_save_settings,
+            cmd_reset_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

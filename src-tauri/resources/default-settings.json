@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "appearance": {
+    "theme": "dark",
+    "accentColor": "#3b82f6",
+    "fontSize": "medium"
+  },
+  "defaults": {
+    "modelId": null,
+    "systemPrompt": "You are Eigen, a helpful AI assistant.\n\nRules:\n- Use Markdown for formatting.\n- Use LaTeX ($...$ / $$...$$) for math.\n- If you don't know, say \"I don't know\"."
+  },
+  "behavior": {
+    "sendOnEnter": true,
+    "streamingEnabled": true,
+    "contextLength": 8192
+  }
+}
