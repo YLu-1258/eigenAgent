@@ -13,6 +13,7 @@ Rules:
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct AppearanceSettings {
     pub theme: String,           // "dark" | "light" | "system"
     pub accent_color: String,    // hex color like "#3b82f6"
@@ -31,6 +32,7 @@ impl Default for AppearanceSettings {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct DefaultSettings {
     pub model_id: Option<String>,
     pub system_prompt: String,
@@ -47,6 +49,7 @@ impl Default for DefaultSettings {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct BehaviorSettings {
     pub send_on_enter: bool,
     pub streaming_enabled: bool,
@@ -65,6 +68,7 @@ impl Default for BehaviorSettings {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct AppSettings {
     pub version: u32,
     pub appearance: AppearanceSettings,

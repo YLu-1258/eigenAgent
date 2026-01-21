@@ -96,11 +96,7 @@ export function SettingsModal({ isOpen, onClose, models }: SettingsModalProps) {
         if (confirm("Reset all settings to defaults? This will be applied immediately.")) {
             try {
                 await resetSettings();
-                // Get the fresh settings from the store after reset
-                const freshSettings = useSettingsStore.getState().settings;
-                setLocalSettings(freshSettings);
-                applyThemePreview(freshSettings);
-                setHasChanges(false);
+                onClose();
             } catch (e) {
                 console.error("Failed to reset settings:", e);
             }
