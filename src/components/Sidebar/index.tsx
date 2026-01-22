@@ -48,7 +48,7 @@ export function Sidebar({
     const [modelCatalogOpen, setModelCatalogOpen] = useState(false);
 
     return (
-        <>
+        <div className={`sidebarWrapper ${isOpen ? "open" : "closed"}`}>
             <div className={`sidebar ${isOpen ? "open" : "closed"}`}>
                 <div className="sidebarHeader">
                     <button className="newChatBtn" onClick={onNewChat}>
@@ -128,6 +128,6 @@ export function Sidebar({
                     {isOpen ? <path d="M15 18l-6-6 6-6" /> : <path d="M9 18l6-6-6-6" />}
                 </svg>
             </button>
-        </>
+        </div>
     );
 }

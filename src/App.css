@@ -230,6 +230,17 @@ html, body, #root {
 }
 
 /* ==================== SIDEBAR ==================== */
+.sidebarWrapper {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.sidebarWrapper.closed {
+  width: 0;
+}
+
 .sidebar {
   width: 300px;
   background: linear-gradient(180deg, var(--color-bg-secondary) 0%, var(--color-bg-primary) 100%);
@@ -237,14 +248,12 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  position: relative;
-  z-index: 10;
+  overflow: hidden;
 }
 
 .sidebar.closed {
   width: 0;
   border-right: none;
-  overflow: hidden;
 }
 
 .sidebarHeader {
@@ -282,6 +291,28 @@ html, body, #root {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-accent) var(--color-bg-primary);
+}
+
+.historySection::-webkit-scrollbar {
+  width: 8px;
+}
+
+.historySection::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.historySection::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--color-accent), var(--color-accent-dark));
+  border-radius: 4px;
+  box-shadow: 0 0 10px var(--color-accent-40);
+  transition: all 0.2s ease;
+}
+
+.historySection::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--color-accent-hover), var(--color-accent));
+  box-shadow: 0 0 16px var(--color-accent-60);
 }
 
 .historyLabel {
@@ -419,14 +450,14 @@ html, body, #root {
 /* ==================== SIDEBAR TOGGLE ==================== */
 .sidebarToggle {
   position: absolute;
-  left: 100%; /* Position at the end of the sidebar */
+  right: -24px; /* Position at the right edge of the sidebar wrapper */
   top: 50%;
-  transform: translate(-100%, -50%); /* Adjust for the toggle's own width */
+  transform: translateY(-50%);
   width: 24px;
   height: 64px;
   background: linear-gradient(90deg, var(--color-bg-secondary) 0%, var(--color-bg-tertiary) 100%);
   border: 1px solid var(--color-border-accent);
-  border-left: 1px solid var(--color-border-accent); /* Added for when sidebar is open */
+  border-left: none;
   border-radius: 0 12px 12px 0;
   display: flex;
   align-items: center;
@@ -438,25 +469,12 @@ html, body, #root {
   box-shadow: 2px 0 12px rgba(0, 0, 0, 0.3);
 }
 
-.sidebar.closed + .sidebarToggle {
-  border: 1px solid var(--color-border-accent);
-  border-left: none; /* Remove left border when closed */
-  background: linear-gradient(90deg, var(--color-bg-tertiary) 0%, var(--color-bg-secondary) 100%);
-  box-shadow: -2px 0 12px rgba(0, 0, 0, 0.3);
-  transform: translate(-50%, -50%); /* Adjust for the toggle's own width when closed */
-  margin-left: 0;
-}
-
 .sidebarToggle:hover {
   background: linear-gradient(90deg, var(--color-accent-20) 0%, var(--color-accent-25) 100%);
   border-color: var(--color-border-accent-hover);
   box-shadow: 2px 0 16px var(--color-accent-30);
   width: 28px;
-}
-
-.sidebar.closed + .sidebarToggle:hover {
-  background: linear-gradient(90deg, var(--color-accent-25) 0%, var(--color-accent-20) 100%);
-  box-shadow: -2px 0 16px var(--color-accent-30);
+  right: -28px;
 }
 
 /* ==================== CHAT COLUMN ==================== */
@@ -1037,7 +1055,7 @@ html, body, #root {
   .sidebar {
     width: 260px;
   }
-  
+
   .msgStack {
     max-width: 75%;
   }
@@ -1165,6 +1183,28 @@ html, body, #root {
   overflow-y: auto;
   padding: 8px;
   flex: 1;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-accent) var(--color-bg-primary);
+}
+
+.modelList::-webkit-scrollbar {
+  width: 8px;
+}
+
+.modelList::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modelList::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--color-accent), var(--color-accent-dark));
+  border-radius: 4px;
+  box-shadow: 0 0 10px var(--color-accent-40);
+  transition: all 0.2s ease;
+}
+
+.modelList::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--color-accent-hover), var(--color-accent));
+  box-shadow: 0 0 16px var(--color-accent-60);
 }
 
 .modelListEmpty {
@@ -1646,6 +1686,28 @@ html, body, #root {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-accent) var(--color-bg-primary);
+}
+
+.settingsContent::-webkit-scrollbar {
+  width: 8px;
+}
+
+.settingsContent::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settingsContent::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--color-accent), var(--color-accent-dark));
+  border-radius: 4px;
+  box-shadow: 0 0 10px var(--color-accent-40);
+  transition: all 0.2s ease;
+}
+
+.settingsContent::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--color-accent-hover), var(--color-accent));
+  box-shadow: 0 0 16px var(--color-accent-60);
 }
 
 .settingsSection {
