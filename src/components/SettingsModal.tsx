@@ -46,13 +46,6 @@ export function SettingsModal({ isOpen, onClose, models }: SettingsModalProps) {
     if (!isOpen) return null;
 
     // Update local settings and mark as changed
-    function updateSettings(updates: Partial<AppSettings>) {
-        setLocalSettings(prev => {
-            const newSettings = { ...prev, ...updates };
-            return newSettings;
-        });
-        setHasChanges(true);
-    }
 
     function updateAppearance(updates: Partial<AppSettings["appearance"]>) {
         setLocalSettings(prev => ({

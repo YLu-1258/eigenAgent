@@ -419,14 +419,14 @@ html, body, #root {
 /* ==================== SIDEBAR TOGGLE ==================== */
 .sidebarToggle {
   position: absolute;
-  left: 300px;
+  left: 100%; /* Position at the end of the sidebar */
   top: 50%;
-  transform: translateY(-50%);
+  transform: translate(-100%, -50%); /* Adjust for the toggle's own width */
   width: 24px;
   height: 64px;
   background: linear-gradient(90deg, var(--color-bg-secondary) 0%, var(--color-bg-tertiary) 100%);
   border: 1px solid var(--color-border-accent);
-  border-left: none;
+  border-left: 1px solid var(--color-border-accent); /* Added for when sidebar is open */
   border-radius: 0 12px 12px 0;
   display: flex;
   align-items: center;
@@ -439,10 +439,12 @@ html, body, #root {
 }
 
 .sidebar.closed + .sidebarToggle {
-  left: 0;
   border: 1px solid var(--color-border-accent);
+  border-left: none; /* Remove left border when closed */
   background: linear-gradient(90deg, var(--color-bg-tertiary) 0%, var(--color-bg-secondary) 100%);
   box-shadow: -2px 0 12px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -50%); /* Adjust for the toggle's own width when closed */
+  margin-left: 0;
 }
 
 .sidebarToggle:hover {
@@ -2118,6 +2120,6 @@ html, body, #root {
   align-items: stretch;
 }
 
-.sidebarFooterRow .userSection {
+.FooterRow .userSection {
   flex: 1;
 }

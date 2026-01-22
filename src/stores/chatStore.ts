@@ -7,7 +7,6 @@ import {
     ChatHistoryItem,
     ChatMessageRow,
     DRAFT_CHAT_ID,
-    ImageAttachment,
 } from "../types/chat";
 import { uid } from "../utils/format";
 
