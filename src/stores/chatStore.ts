@@ -32,7 +32,7 @@ interface ChatState {
 
     // Refs tracked in state (for cross-component access)
     currentAssistantId: string | null;
-    needsTitleGeneration: boolean;
+    pendingTitleChatId: string | null; // Chat ID that needs title generation
 
     // Actions
     setMessages: (messages: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
@@ -40,7 +40,7 @@ interface ChatState {
     setIsGenerating: (isGenerating: boolean) => void;
     setSelectedThinkingId: (id: string | null) => void;
     setCurrentAssistantId: (id: string | null) => void;
-    setNeedsTitleGeneration: (needs: boolean) => void;
+    setPendingTitleChatId: (chatId: string | null) => void;
 
     // Complex actions
     loadChat: (chatId: string) => Promise<void>;
@@ -65,7 +65,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     chatHistory: [],
     selectedThinkingId: null,
     currentAssistantId: null,
-    needsTitleGeneration: false,
+    pendingTitleChatId: null,
 
     // Simple setters
     setMessages: (messagesOrFn) => {
@@ -80,7 +80,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setIsGenerating: (isGenerating) => set({ isGenerating }),
     setSelectedThinkingId: (selectedThinkingId) => set({ selectedThinkingId }),
     setCurrentAssistantId: (currentAssistantId) => set({ currentAssistantId }),
-    setNeedsTitleGeneration: (needsTitleGeneration) => set({ needsTitleGeneration }),
+    setPendingTitleChatId: (pendingTitleChatId) => set({ pendingTitleChatId }),
 
     // Complex actions
     loadChat: async (chatId: string) => {
@@ -122,7 +122,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             selectedThinkingId: null,
             isGenerating: false,
             currentAssistantId: null,
-            needsTitleGeneration: false,
+            // Note: Don't reset pendingTitleChatId here - it tracks a specific chat
         });
     },
 

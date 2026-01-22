@@ -234,6 +234,8 @@ pub async fn generate_chat_title(
         .unwrap_or_else(|| "New chat".to_string());
 
     // Clean up the title: remove quotes, trim, limit length
+
+    print!("[generate_chat_title] Raw generated title: {:?}", generated_title);
     let final_title = generated_title
         .trim()
         .trim_matches('"')

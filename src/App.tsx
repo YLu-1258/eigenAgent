@@ -44,7 +44,7 @@ export default function App() {
         setIsGenerating,
         setSelectedThinkingId,
         setCurrentAssistantId,
-        setNeedsTitleGeneration,
+        setPendingTitleChatId,
         loadChat,
         resetToDraftChat,
         refreshChats,
@@ -133,18 +133,25 @@ export default function App() {
             unlistenEnd = await listen<ChatEndPayload>("chat:end", (event) => {
                 if (!mounted) return;
                 if (!event.payload) return;
-                if (event.payload.chat_id !== activeChatIdRef.current) return;
 
-                endStreaming(event.payload.duration_ms);
-
-                // Generate title for new chats
+                const eventChatId = event.payload.chat_id;
                 const state = useChatStore.getState();
-                if (state.needsTitleGeneration) {
-                    setNeedsTitleGeneration(false);
-                    const chatIdForTitle = event.payload.chat_id;
-                    console.log("[generate_chat_title] requesting title for:", chatIdForTitle);
-                    invoke("generate_chat_title", { args: { chatId: chatIdForTitle } })
-                        .then(() => console.log("[generate_chat_title] completed for:", chatIdForTitle))
+
+                // Only process streaming end for the active chat
+                if (eventChatId === activeChatIdRef.current) {
+                    endStreaming(event.payload.duration_ms);
+                }
+
+                // Generate title if this chat was pending title generation
+                // This works even if user switched to a different chat
+                if (state.pendingTitleChatId === eventChatId) {
+                    setPendingTitleChatId(null);
+                    console.log("[generate_chat_title] requesting title for:", eventChatId);
+                    invoke("generate_chat_title", { args: { chatId: eventChatId } })
+                        .then(() => {
+                            console.log("[generate_chat_title] completed for:", eventChatId);
+                            refreshChats(); // Refresh to show new title
+                        })
                         .catch((err) => console.error("[generate_chat_title] error:", err));
                 }
 
@@ -158,7 +165,7 @@ export default function App() {
             unlistenDelta?.();
             unlistenEnd?.();
         };
-    }, [chatId, beginStreaming, appendDelta, endStreaming, setNeedsTitleGeneration, refreshChats]);
+    }, [chatId, beginStreaming, appendDelta, endStreaming, setPendingTitleChatId, refreshChats]);
 
     // Load chat list initially + whenever backend says it changed
     useEffect(() => {
@@ -226,7 +233,7 @@ export default function App() {
             if (chat_id === DRAFT_CHAT_ID) {
                 chat_id = await invoke<string>("new_chat");
                 setChatId(chat_id);
-                setNeedsTitleGeneration(true);
+                setPendingTitleChatId(chat_id); // Mark this specific chat for title generation
                 await refreshChats();
             }
 
