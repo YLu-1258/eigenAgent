@@ -9,7 +9,7 @@ use rusqlite::params;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::db::{insert_message, open_db};
-use crate::state::{LlamaServerManager, MAX_TOKENS};
+use crate::state::LlamaServerManager;
 use crate::types::{
     ChatBeginPayload, ChatDeltaPayload, ChatEndPayload, ChatMsg, ChatStreamArgs,
     ImageUrlData, OpenAIContent, OpenAIContentPart, OpenAIMessage, OpenAIRequest,
@@ -73,10 +73,13 @@ pub async fn chat_stream(
         msgs
     };
 
-    // Get system prompt from settings
-    let system_prompt = {
+    // Get system prompt and max tokens from settings
+    let (system_prompt, max_tokens) = {
         let settings = state.app_settings.lock().map_err(|e| e.to_string())?;
-        settings.defaults.system_prompt.clone()
+        (
+            settings.defaults.system_prompt.clone(),
+            settings.behavior.max_tokens,
+        )
     };
 
     // Build OpenAI-format messages
@@ -132,7 +135,7 @@ pub async fn chat_stream(
         model: "qwen3-vl".to_string(),
         messages: openai_messages,
         stream: true,
-        max_tokens: MAX_TOKENS,
+        max_tokens,
     };
 
     let request_builder = client

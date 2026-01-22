@@ -93,13 +93,11 @@ export function SettingsModal({ isOpen, onClose, models }: SettingsModalProps) {
     }
 
     async function handleResetAll() {
-        if (confirm("Reset all settings to defaults? This will be applied immediately.")) {
-            try {
-                await resetSettings();
-                onClose();
-            } catch (e) {
-                console.error("Failed to reset settings:", e);
-            }
+        try {
+            console.log("Resetting all settings to default...");
+            await resetSettings();
+        } catch (e) {
+            console.error("Failed to reset settings:", e);
         }
     }
 
@@ -308,6 +306,7 @@ export function SettingsModal({ isOpen, onClose, models }: SettingsModalProps) {
                                 <label className="settingLabel">Context Length</label>
                                 <span className="contextValue">{localSettings.behavior.contextLength.toLocaleString()} tokens</span>
                             </div>
+                            <span className="settingDescription">Total context window - how much conversation history the model can see</span>
                             <input
                                 type="range"
                                 className="settingSlider"
@@ -320,6 +319,27 @@ export function SettingsModal({ isOpen, onClose, models }: SettingsModalProps) {
                             <div className="sliderLabels">
                                 <span>512</span>
                                 <span>32,768</span>
+                            </div>
+                        </div>
+
+                        <div className="settingRow vertical">
+                            <div className="settingLabelRow">
+                                <label className="settingLabel">Max Tokens</label>
+                                <span className="contextValue">{localSettings.behavior.maxTokens.toLocaleString()} tokens</span>
+                            </div>
+                            <span className="settingDescription">Maximum tokens per response - how long each reply can be</span>
+                            <input
+                                type="range"
+                                className="settingSlider"
+                                min={256}
+                                max={16384}
+                                step={256}
+                                value={localSettings.behavior.maxTokens}
+                                onChange={(e) => updateBehavior({ maxTokens: parseInt(e.target.value) })}
+                            />
+                            <div className="sliderLabels">
+                                <span>256</span>
+                                <span>16,384</span>
                             </div>
                         </div>
                     </section>

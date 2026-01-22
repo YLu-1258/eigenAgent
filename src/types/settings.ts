@@ -17,7 +17,8 @@ export interface DefaultSettings {
 export interface BehaviorSettings {
     sendOnEnter: boolean;
     streamingEnabled: boolean;
-    contextLength: number;
+    contextLength: number;  // --ctx-size: total context window
+    maxTokens: number;      // --n-predict: max tokens per response
 }
 
 export interface AppSettings {
@@ -58,5 +59,6 @@ export const getDefaultSettings = (): AppSettings => ({
         sendOnEnter: true,
         streamingEnabled: true,
         contextLength: 8192,
+        maxTokens: 4096,
     },
 });

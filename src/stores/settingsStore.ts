@@ -23,6 +23,7 @@ interface SettingsState {
     setSendOnEnter: (value: boolean) => Promise<void>;
     setStreamingEnabled: (value: boolean) => Promise<void>;
     setContextLength: (length: number) => Promise<void>;
+    setMaxTokens: (tokens: number) => Promise<void>;
 }
 
 // Apply theme to document
@@ -248,6 +249,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         const newSettings = {
             ...settings,
             behavior: { ...settings.behavior, contextLength },
+        };
+        await saveSettings(newSettings);
+    },
+
+    setMaxTokens: async (maxTokens: number) => {
+        const { settings, saveSettings } = get();
+        const newSettings = {
+            ...settings,
+            behavior: { ...settings.behavior, maxTokens },
         };
         await saveSettings(newSettings);
     },

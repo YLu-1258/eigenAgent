@@ -53,7 +53,8 @@ impl Default for DefaultSettings {
 pub struct BehaviorSettings {
     pub send_on_enter: bool,
     pub streaming_enabled: bool,
-    pub context_length: u32,
+    pub context_length: u32,  // --ctx-size: total context window
+    pub max_tokens: u32,      // --n-predict: max tokens per response
 }
 
 impl Default for BehaviorSettings {
@@ -62,6 +63,7 @@ impl Default for BehaviorSettings {
             send_on_enter: true,
             streaming_enabled: true,
             context_length: 8192,
+            max_tokens: 4096,
         }
     }
 }

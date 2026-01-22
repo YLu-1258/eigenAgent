@@ -29,7 +29,7 @@ use db::{init_db, open_db, resolve_db_path};
 use models::{find_model_files, get_model_paths, get_models_dir, load_or_create_catalog, scan_models_dir};
 use server::wait_for_server_ready;
 use settings::{get_default_settings, load_settings, save_settings, AppSettings};
-use state::{LlamaServerManager, MAX_TOKENS, SERVER_PORT};
+use state::{LlamaServerManager, SERVER_PORT};
 
 // ==================== Settings Commands ====================
 
@@ -91,19 +91,42 @@ pub fn run() {
             let models_dir = get_models_dir(&app_handle)?;
             println!("[models] dir = {}", models_dir.display());
 
+            // Load settings first (needed for default model selection)
+            let app_settings = load_settings().unwrap_or_else(|e| {
+                eprintln!("[settings] Failed to load settings, using defaults: {}", e);
+                get_default_settings()
+            });
+            println!("[settings] Loaded settings (theme: {})", app_settings.appearance.theme);
+
             // Load or create model catalog
             let catalog = load_or_create_catalog(&app_handle)?;
             println!("[catalog] loaded {} models", catalog.models.len());
 
-            // Find model files - try catalog first, then legacy
+            // Find model files - prefer default model from settings, then first available
             let found_model: Option<(PathBuf, Option<PathBuf>, String)> = {
-                // First try to find a downloaded model from catalog
                 let mut found: Option<(PathBuf, Option<PathBuf>, String)> = None;
 
-                for entry in &catalog.models {
-                    if let Some((mp, mmpp)) = get_model_paths(&models_dir, entry) {
-                        found = Some((mp, mmpp, entry.id.clone()));
-                        break;
+                // First, try to use the default model from settings if set
+                if let Some(ref preferred_id) = app_settings.defaults.model_id {
+                    println!("[model] Preferred model from settings: {}", preferred_id);
+                    for entry in &catalog.models {
+                        if entry.id == *preferred_id {
+                            if let Some((mp, mmpp)) = get_model_paths(&models_dir, entry) {
+                                println!("[model] Found preferred model: {}", entry.id);
+                                found = Some((mp, mmpp, entry.id.clone()));
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // If preferred model not found, try first available from catalog
+                if found.is_none() {
+                    for entry in &catalog.models {
+                        if let Some((mp, mmpp)) = get_model_paths(&models_dir, entry) {
+                            found = Some((mp, mmpp, entry.id.clone()));
+                            break;
+                        }
                     }
                 }
 
@@ -125,13 +148,6 @@ pub fn run() {
             };
 
             let server_url = format!("http://127.0.0.1:{}", SERVER_PORT);
-
-            // Load settings
-            let app_settings = load_settings().unwrap_or_else(|e| {
-                eprintln!("[settings] Failed to load settings, using defaults: {}", e);
-                get_default_settings()
-            });
-            println!("[settings] Loaded settings (theme: {})", app_settings.appearance.theme);
 
             // Store state - use empty path if no model found
             let (model_path, mmproj_path, current_model_id) = match found_model {
@@ -186,12 +202,21 @@ pub fn run() {
                         .sidecar("llama-server")
                         .expect("Failed to create sidecar command");
 
+                    // Get context length and max tokens from settings
+                    let (ctx_size, max_tokens) = {
+                        let settings = state.app_settings.lock().unwrap();
+                        (
+                            settings.behavior.context_length.to_string(),
+                            settings.behavior.max_tokens.to_string(),
+                        )
+                    };
+
                     cmd = cmd
                         .args(["-m", model_path_clone.to_str().unwrap()])
                         .args(["--host", "127.0.0.1"])
                         .args(["--port", &SERVER_PORT.to_string()])
-                        .args(["--ctx-size", "8192"])
-                        .args(["--n-predict", &MAX_TOKENS.to_string()]);
+                        .args(["--ctx-size", &ctx_size])
+                        .args(["--n-predict", &max_tokens]);
 
                     // Add vision projector if available
                     if let Some(ref mmproj) = mmproj_path_clone {

@@ -16,7 +16,7 @@ use crate::models::{
     load_or_create_catalog, scan_models_dir,
 };
 use crate::server::wait_for_server_ready;
-use crate::state::{LlamaServerManager, MAX_TOKENS, SERVER_PORT};
+use crate::state::{LlamaServerManager, SERVER_PORT};
 use crate::types::{
     CancelDownloadArgs, DeleteModelArgs, DownloadModelArgs, DownloadProgressPayload,
     ModelCapabilities, ModelFile, ModelInfo, ModelSwitchPayload, SwitchModelArgs,
@@ -172,12 +172,21 @@ pub async fn switch_model(
         .sidecar("llama-server")
         .map_err(|e| e.to_string())?;
 
+    // Get context length and max tokens from settings
+    let (ctx_size, max_tokens) = {
+        let settings = state.app_settings.lock().map_err(|e| e.to_string())?;
+        (
+            settings.behavior.context_length.to_string(),
+            settings.behavior.max_tokens.to_string(),
+        )
+    };
+
     cmd = cmd
         .args(["-m", model_path.to_str().unwrap()])
         .args(["--host", "127.0.0.1"])
         .args(["--port", &SERVER_PORT.to_string()])
-        .args(["--ctx-size", "8192"])
-        .args(["--n-predict", &MAX_TOKENS.to_string()]);
+        .args(["--ctx-size", &ctx_size])
+        .args(["--n-predict", &max_tokens]);
 
     if let Some(ref mmproj) = mmproj_path {
         cmd = cmd.args(["--mmproj", mmproj.to_str().unwrap()]);
