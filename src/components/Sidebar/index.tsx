@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { ChatHistoryItem } from "../../types/chat";
 import { ModelInfo } from "../../types/model";
+import { ToolWithStatus } from "../../types/tools";
 import { ChatHistory } from "./ChatHistory";
 import { ModelCatalog } from "./ModelCatalog";
+import { ToolCatalog } from "./ToolCatalog";
 
 interface SidebarProps {
     isOpen: boolean;
@@ -15,6 +17,7 @@ interface SidebarProps {
     noModelInstalled: boolean;
     modelSwitching: boolean;
     downloadProgress: Record<string, { percent: number; speed: number }>;
+    tools: ToolWithStatus[];
     onToggle: () => void;
     onNewChat: () => void;
     onLoadChat: (chatId: string) => void;
@@ -24,6 +27,7 @@ interface SidebarProps {
     onCancelDownload: (modelId: string) => void;
     onDeleteModel: (modelId: string) => void;
     onOpenSettings: () => void;
+    onToggleTool: (toolId: string, enabled: boolean) => void;
 }
 
 export function Sidebar({
@@ -35,6 +39,7 @@ export function Sidebar({
     noModelInstalled,
     modelSwitching,
     downloadProgress,
+    tools,
     onToggle,
     onNewChat,
     onLoadChat,
@@ -44,8 +49,12 @@ export function Sidebar({
     onCancelDownload,
     onDeleteModel,
     onOpenSettings,
+    onToggleTool,
 }: SidebarProps) {
     const [modelCatalogOpen, setModelCatalogOpen] = useState(false);
+    const [toolCatalogOpen, setToolCatalogOpen] = useState(false);
+
+    const enabledToolCount = tools.filter((t) => t.enabled).length;
 
     return (
         <div className={`sidebarWrapper ${isOpen ? "open" : "closed"}`}>
@@ -80,10 +89,21 @@ export function Sidebar({
                         />
                     )}
 
+                    {toolCatalogOpen && (
+                        <ToolCatalog
+                            tools={tools}
+                            onClose={() => setToolCatalogOpen(false)}
+                            onToggleTool={onToggleTool}
+                        />
+                    )}
+
                     <div className="sidebarFooterRow">
                         <div
                             className={`userSection ${modelCatalogOpen ? "active" : ""} ${noModelInstalled ? "warning" : ""}`}
-                            onClick={() => setModelCatalogOpen(!modelCatalogOpen)}
+                            onClick={() => {
+                                setModelCatalogOpen(!modelCatalogOpen);
+                                if (!modelCatalogOpen) setToolCatalogOpen(false);
+                            }}
                         >
                             <div className={`userAvatar ${noModelInstalled ? "warning" : ""}`}>E</div>
                             <div className="userInfo">
@@ -104,6 +124,21 @@ export function Sidebar({
                                 <path d="M18 15l-6-6-6 6" />
                             </svg>
                         </div>
+                        <button
+                            className={`toolsBtn ${toolCatalogOpen ? "active" : ""}`}
+                            onClick={() => {
+                                setToolCatalogOpen(!toolCatalogOpen);
+                                if (!toolCatalogOpen) setModelCatalogOpen(false);
+                            }}
+                            title="Tools"
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
+                            </svg>
+                            {enabledToolCount > 0 && (
+                                <span className="toolsBadge">{enabledToolCount}</span>
+                            )}
+                        </button>
                         <button
                             className="settingsBtn"
                             onClick={onOpenSettings}

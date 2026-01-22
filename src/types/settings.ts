@@ -21,11 +21,17 @@ export interface BehaviorSettings {
     maxTokens: number;      // --n-predict: max tokens per response
 }
 
+export interface ToolSettings {
+    enabledTools: string[];
+    requireConfirmationForDangerous: boolean;
+}
+
 export interface AppSettings {
     version: number;
     appearance: AppearanceSettings;
     defaults: DefaultSettings;
     behavior: BehaviorSettings;
+    tools: ToolSettings;
 }
 
 export const DEFAULT_SYSTEM_PROMPT = `You are Eigen, a helpful AI assistant.
@@ -60,5 +66,9 @@ export const getDefaultSettings = (): AppSettings => ({
         streamingEnabled: true,
         contextLength: 8192,
         maxTokens: 4096,
+    },
+    tools: {
+        enabledTools: ["wikipedia", "calculator"],
+        requireConfirmationForDangerous: true,
     },
 });

@@ -18,12 +18,14 @@ mod models;
 mod server;
 mod settings;
 mod state;
+mod tools;
 mod types;
 
 use commands::{
-    cancel_download, cancel_generation, chat_stream, delete_chat, delete_model,
-    download_model, generate_chat_title, get_chat_messages, get_current_model, list_chats,
-    list_models, model_status, new_chat, rename_chat, switch_model,
+    cancel_download, cancel_generation, chat_stream, cmd_get_enabled_tools, cmd_list_tools,
+    cmd_toggle_tool, delete_chat, delete_model, download_model, generate_chat_title,
+    get_chat_messages, get_current_model, list_chats, list_models, model_status, new_chat,
+    rename_chat, switch_model,
 };
 use db::{init_db, open_db, resolve_db_path};
 use models::{find_model_files, get_model_paths, get_models_dir, load_or_create_catalog, scan_models_dir};
@@ -358,7 +360,10 @@ pub fn run() {
             delete_model,
             cmd_load_settings,
             cmd_save_settings,
-            cmd_reset_settings
+            cmd_reset_settings,
+            cmd_list_tools,
+            cmd_toggle_tool,
+            cmd_get_enabled_tools
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

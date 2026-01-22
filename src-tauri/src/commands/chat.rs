@@ -8,8 +8,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::db::{open_db, unix_ms};
 use crate::state::LlamaServerManager;
 use crate::types::{
-    ChatListItem, ChatMessageRow, DeleteChatArgs, GenerateTitleArgs, RenameChatArgs,
-    OpenAIContent, OpenAIMessage, OpenAINonStreamResponse, OpenAIRequest,
+    ChatListItem, ChatMessageRow, DeleteChatArgs, GenerateTitleArgs, OpenAIContent, OpenAIMessage,
+    OpenAINonStreamResponse, OpenAIRequest, RenameChatArgs,
 };
 
 #[tauri::command]
@@ -182,22 +182,28 @@ pub async fn generate_chat_title(
     // Use LLM to generate a concise title
     let client = reqwest::Client::new();
 
+    let messages = vec![
+        OpenAIMessage {
+            role: "system".to_string(),
+            content: OpenAIContent::Text(
+                "Generate a short chat title (3-6 words max). Return ONLY the title, no quotes, no explanation.".to_string()
+            ),
+        },
+        OpenAIMessage {
+            role: "user".to_string(),
+            content: OpenAIContent::Text(truncated_msg),
+        },
+    ];
+
     let request_body = OpenAIRequest {
         model: "default".to_string(),
-        messages: vec![
-            OpenAIMessage {
-                role: "system".to_string(),
-                content: OpenAIContent::Text(
-                    "Generate a short chat title (3-6 words max). Return ONLY the title, no quotes, no explanation.".to_string()
-                ),
-            },
-            OpenAIMessage {
-                role: "user".to_string(),
-                content: OpenAIContent::Text(truncated_msg),
-            },
-        ],
+        messages: messages
+            .iter()
+            .map(|m| serde_json::to_value(m).unwrap())
+            .collect(),
         stream: false,
         max_tokens: 30,
+        tools: None,
     };
 
     let response = match client

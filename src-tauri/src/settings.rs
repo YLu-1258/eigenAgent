@@ -71,11 +71,30 @@ impl Default for BehaviorSettings {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 #[serde(default)]
+pub struct ToolSettings {
+    pub enabled_tools: Vec<String>,
+    pub require_confirmation_for_dangerous: bool,
+}
+
+impl Default for ToolSettings {
+    fn default() -> Self {
+        Self {
+            // Enable safe tools by default
+            enabled_tools: vec!["wikipedia".to_string(), "calculator".to_string()],
+            require_confirmation_for_dangerous: true,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct AppSettings {
     pub version: u32,
     pub appearance: AppearanceSettings,
     pub defaults: DefaultSettings,
     pub behavior: BehaviorSettings,
+    pub tools: ToolSettings,
 }
 
 impl Default for AppSettings {
@@ -85,6 +104,7 @@ impl Default for AppSettings {
             appearance: AppearanceSettings::default(),
             defaults: DefaultSettings::default(),
             behavior: BehaviorSettings::default(),
+            tools: ToolSettings::default(),
         }
     }
 }

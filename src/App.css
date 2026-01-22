@@ -2185,3 +2185,333 @@ html, body, #root {
 .FooterRow .userSection {
   flex: 1;
 }
+
+/* ==================== TOOLS BUTTON ==================== */
+.toolsBtn {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--color-accent-20);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.toolsBtn:hover {
+  background: var(--color-accent-15);
+  color: var(--color-accent-hover);
+  border-color: var(--color-accent-30);
+}
+
+.toolsBtn.active {
+  background: var(--color-accent-20);
+  border-color: var(--color-accent-40);
+  color: var(--color-accent);
+}
+
+.toolsBadge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: var(--color-accent);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+/* ==================== TOOL CATALOG ==================== */
+.toolCatalog {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-accent);
+  border-radius: 16px;
+  margin-bottom: 8px;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.5), 0 0 48px var(--color-accent-10);
+  overflow: hidden;
+  animation: slideUp 0.2s ease-out;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+}
+
+.toolCatalogHeader {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-accent-15);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  background: rgba(26, 26, 26, 0.5);
+}
+
+[data-theme="light"] .toolCatalogHeader {
+  background: rgba(249, 250, 251, 0.8);
+}
+
+.toolList {
+  overflow-y: auto;
+  padding: 8px;
+  flex: 1;
+}
+
+.toolListEmpty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--color-text-dim);
+  font-size: var(--font-size-sm);
+}
+
+.toolCategory {
+  margin-bottom: 8px;
+}
+
+.toolCategory:last-child {
+  margin-bottom: 0;
+}
+
+.toolCategoryHeader {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 8px 4px;
+}
+
+.toolItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 10px;
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.toolItem:last-child {
+  margin-bottom: 0;
+}
+
+.toolItem:hover {
+  background: var(--color-accent-10);
+  border-color: var(--color-accent-15);
+}
+
+.toolItem.enabled {
+  background: var(--color-accent-10);
+  border-color: var(--color-accent-20);
+}
+
+.toolItemMain {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.toolIcon {
+  font-size: 18px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.toolInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolName {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.warningBadge {
+  font-size: 12px;
+  cursor: help;
+}
+
+.toolDescription {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-dim);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+/* Toggle switch */
+.toolToggle {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.toolToggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggleSlider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--color-bg-quaternary);
+  border-radius: 22px;
+  transition: 0.3s;
+}
+
+.toggleSlider::before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: 0.3s;
+}
+
+.toolToggle input:checked + .toggleSlider {
+  background: var(--color-accent);
+}
+
+.toolToggle input:checked + .toggleSlider::before {
+  transform: translateX(18px);
+}
+
+/* ==================== TOOL CALL DISPLAY ==================== */
+.toolCallsContainer {
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toolCallCard {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-accent-20);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+}
+
+.toolCallCard.running {
+  border-color: var(--color-accent-40);
+  box-shadow: 0 0 16px var(--color-accent-20);
+}
+
+.toolCallCard.success {
+  border-color: var(--color-success);
+}
+
+.toolCallCard.error {
+  border-color: var(--color-error);
+}
+
+.toolCallHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-bg-quaternary);
+  border-bottom: 1px solid var(--color-accent-15);
+}
+
+.toolCallIcon {
+  font-size: 14px;
+}
+
+.toolCallName {
+  flex: 1;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.toolCallStatus {
+  font-size: 12px;
+}
+
+.toolCallStatus.running {
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.toolCallStatus.success {
+  color: var(--color-success);
+}
+
+.toolCallStatus.error {
+  color: var(--color-error);
+}
+
+.toolCallArgs {
+  padding: 8px 12px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-dim);
+  background: var(--color-bg-secondary);
+  font-family: 'SF Mono', Monaco, monospace;
+  word-break: break-all;
+}
+
+.toolCallOutput {
+  border-top: 1px solid var(--color-accent-15);
+}
+
+.toolCallOutputHeader {
+  padding: 6px 12px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--color-bg-quaternary);
+}
+
+.toolCallOutputContent {
+  padding: 8px 12px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  max-height: 150px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+.toolCallError {
+  padding: 8px 12px;
+  font-size: var(--font-size-xs);
+  color: var(--color-error);
+  background: rgba(239, 68, 68, 0.1);
+}

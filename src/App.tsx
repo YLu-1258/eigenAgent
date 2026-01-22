@@ -9,10 +9,12 @@ import "./App.css";
 
 // Types
 import { ChatBeginPayload, ChatDeltaPayload, ChatEndPayload, DRAFT_CHAT_ID } from "./types/chat";
+import { ToolCallingPayload, ToolResultPayload } from "./types/tools";
 
 // Stores
 import { useSettingsStore } from "./stores/settingsStore";
 import { useChatStore } from "./stores/chatStore";
+import { useToolStore } from "./stores/toolStore";
 
 // Hooks
 import { useModels } from "./hooks/useModels";
@@ -85,6 +87,9 @@ export default function App() {
 
     // Settings store
     const { settings, loadSettings } = useSettingsStore();
+
+    // Tool store
+    const { tools, loadTools, toggleTool, addToolCall, updateToolResult } = useToolStore();
 
     // Refs
     const activeChatIdRef = useRef(chatId);
@@ -183,10 +188,40 @@ export default function App() {
         };
     }, [refreshChats]);
 
-    // Load settings on mount
+    // Load settings and tools on mount
     useEffect(() => {
         loadSettings();
-    }, [loadSettings]);
+        loadTools();
+    }, [loadSettings, loadTools]);
+
+    // Listen for tool events
+    useEffect(() => {
+        let mounted = true;
+        let unlistenCalling: null | (() => void) = null;
+        let unlistenResult: null | (() => void) = null;
+
+        (async () => {
+            unlistenCalling = await listen<ToolCallingPayload>("tool:calling", (event) => {
+                if (!mounted) return;
+                if (!event.payload) return;
+                console.log("[tool:calling]", event.payload);
+                addToolCall(event.payload);
+            });
+
+            unlistenResult = await listen<ToolResultPayload>("tool:result", (event) => {
+                if (!mounted) return;
+                if (!event.payload) return;
+                console.log("[tool:result]", event.payload);
+                updateToolResult(event.payload);
+            });
+        })();
+
+        return () => {
+            mounted = false;
+            unlistenCalling?.();
+            unlistenResult?.();
+        };
+    }, [addToolCall, updateToolResult]);
 
     // Keyboard shortcut for settings (Cmd/Ctrl + ,)
     useEffect(() => {
@@ -342,6 +377,7 @@ export default function App() {
                 noModelInstalled={noModelInstalled}
                 modelSwitching={modelSwitching}
                 downloadProgress={downloadProgress}
+                tools={tools}
                 onToggle={() => setSidebarOpen(!sidebarOpen)}
                 onNewChat={handleNewChat}
                 onLoadChat={loadChat}
@@ -351,6 +387,7 @@ export default function App() {
                 onCancelDownload={cancelDownload}
                 onDeleteModel={deleteModel}
                 onOpenSettings={() => setSettingsOpen(true)}
+                onToggleTool={toggleTool}
             />
 
             {/* CENTER: Chat */}
